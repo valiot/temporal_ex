@@ -174,6 +174,8 @@ defmodule TemporalEx.Client do
   end
 
   defp invoke_rpc(rpc_name, channel, request, opts) do
+    Code.ensure_loaded(@workflow_service_stub)
+
     if function_exported?(@workflow_service_stub, rpc_name, 3) do
       case apply(@workflow_service_stub, rpc_name, [channel, request, opts]) do
         {:ok, response} -> {:ok, response}
