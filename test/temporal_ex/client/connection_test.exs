@@ -188,7 +188,9 @@ defmodule TemporalEx.Client.ConnectionTest do
 
   describe "cleanup_temp_pem_files/1" do
     test "removes files" do
-      path = Path.join(System.tmp_dir!(), "test-cleanup-#{System.unique_integer([:positive])}.pem")
+      path =
+        Path.join(System.tmp_dir!(), "test-cleanup-#{System.unique_integer([:positive])}.pem")
+
       File.write!(path, "test")
       assert File.exists?(path)
 
