@@ -127,7 +127,12 @@ defmodule TemporalEx.WorkflowHandle do
       first_execution_run_id: handle.first_execution_run_id || ""
     }
 
-    case Client.rpc(handle.client, :request_cancel_workflow_execution, request, rpc_opts(handle, opts)) do
+    case Client.rpc(
+           handle.client,
+           :request_cancel_workflow_execution,
+           request,
+           rpc_opts(handle, opts)
+         ) do
       {:ok, _response} -> :ok
       {:error, err} -> {:error, Error.from_rpc_error(err)}
     end
@@ -200,7 +205,11 @@ defmodule TemporalEx.WorkflowHandle do
   @spec get_history(t(), keyword()) :: {:ok, map()} | {:error, Error.t()}
   def get_history(%__MODULE__{} = handle, opts \\ []) do
     reverse = Keyword.get(opts, :reverse, false)
-    rpc_name = if reverse, do: :get_workflow_execution_history_reverse, else: :get_workflow_execution_history
+
+    rpc_name =
+      if reverse,
+        do: :get_workflow_execution_history_reverse,
+        else: :get_workflow_execution_history
 
     request = %Temporal.Api.Workflowservice.V1.GetWorkflowExecutionHistoryRequest{
       namespace: resolve_namespace(handle),
@@ -215,11 +224,12 @@ defmodule TemporalEx.WorkflowHandle do
 
     case Client.rpc(handle.client, rpc_name, request, rpc_opts(handle, opts)) do
       {:ok, response} ->
-        {:ok, %{
-          history: response.history,
-          next_page_token: response.next_page_token,
-          archived: Map.get(response, :archived, false)
-        }}
+        {:ok,
+         %{
+           history: response.history,
+           next_page_token: response.next_page_token,
+           archived: Map.get(response, :archived, false)
+         }}
 
       {:error, err} ->
         {:error, Error.from_rpc_error(err)}
@@ -248,7 +258,12 @@ defmodule TemporalEx.WorkflowHandle do
       skip_archival: true
     }
 
-    case Client.rpc(handle.client, :get_workflow_execution_history, request, rpc_opts(handle, Keyword.put(opts, :timeout, timeout))) do
+    case Client.rpc(
+           handle.client,
+           :get_workflow_execution_history,
+           request,
+           rpc_opts(handle, Keyword.put(opts, :timeout, timeout))
+         ) do
       {:ok, response} ->
         extract_result_from_close_event(response, converter)
 
@@ -275,8 +290,7 @@ defmodule TemporalEx.WorkflowHandle do
       reason: Keyword.get(opts, :reason, ""),
       workflow_task_finish_event_id: Keyword.fetch!(opts, :workflow_task_finish_event_id),
       request_id: Keyword.get(opts, :request_id, ""),
-      reset_reapply_type:
-        Keyword.get(opts, :reset_reapply_type, :RESET_REAPPLY_TYPE_SIGNAL)
+      reset_reapply_type: Keyword.get(opts, :reset_reapply_type, :RESET_REAPPLY_TYPE_SIGNAL)
     }
 
     case Client.rpc(handle.client, :reset_workflow_execution, request, rpc_opts(handle, opts)) do
@@ -308,7 +322,10 @@ defmodule TemporalEx.WorkflowHandle do
 
   defp query_reject_condition(nil), do: :QUERY_REJECT_CONDITION_UNSPECIFIED
   defp query_reject_condition(:not_open), do: :QUERY_REJECT_CONDITION_NOT_OPEN
-  defp query_reject_condition(:not_completed_cleanly), do: :QUERY_REJECT_CONDITION_NOT_COMPLETED_CLEANLY
+
+  defp query_reject_condition(:not_completed_cleanly),
+    do: :QUERY_REJECT_CONDITION_NOT_COMPLETED_CLEANLY
+
   defp query_reject_condition(value) when is_atom(value), do: value
 
   defp extract_result_from_close_event(response, converter) do

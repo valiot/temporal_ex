@@ -16,13 +16,23 @@ defmodule TemporalEx.Error do
   defmodule WorkflowAlreadyStarted do
     @moduledoc "Raised when starting a workflow whose ID is already running."
     defstruct [:workflow_id, :run_id, :message]
-    @type t :: %__MODULE__{workflow_id: String.t() | nil, run_id: String.t() | nil, message: String.t()}
+
+    @type t :: %__MODULE__{
+            workflow_id: String.t() | nil,
+            run_id: String.t() | nil,
+            message: String.t()
+          }
   end
 
   defmodule WorkflowNotFound do
     @moduledoc "Raised when the referenced workflow execution does not exist."
     defstruct [:workflow_id, :run_id, :message]
-    @type t :: %__MODULE__{workflow_id: String.t() | nil, run_id: String.t() | nil, message: String.t()}
+
+    @type t :: %__MODULE__{
+            workflow_id: String.t() | nil,
+            run_id: String.t() | nil,
+            message: String.t()
+          }
   end
 
   defmodule NamespaceNotFound do

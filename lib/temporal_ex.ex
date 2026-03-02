@@ -116,7 +116,8 @@ defmodule TemporalEx do
       workflow_task_timeout: Common.to_duration(Keyword.get(opts, :task_timeout)),
       retry_policy: Common.to_retry_policy(Keyword.get(opts, :retry_policy)),
       memo: Common.to_memo(Keyword.get(opts, :memo), converter),
-      search_attributes: Common.to_search_attributes(Keyword.get(opts, :search_attributes), converter),
+      search_attributes:
+        Common.to_search_attributes(Keyword.get(opts, :search_attributes), converter),
       workflow_start_delay: Common.to_duration(Keyword.get(opts, :start_delay)),
       request_id: Keyword.get(opts, :request_id, ""),
       identity: Keyword.get(opts, :identity, ""),
@@ -200,7 +201,8 @@ defmodule TemporalEx do
       workflow_task_timeout: Common.to_duration(Keyword.get(opts, :task_timeout)),
       retry_policy: Common.to_retry_policy(Keyword.get(opts, :retry_policy)),
       memo: Common.to_memo(Keyword.get(opts, :memo), converter),
-      search_attributes: Common.to_search_attributes(Keyword.get(opts, :search_attributes), converter),
+      search_attributes:
+        Common.to_search_attributes(Keyword.get(opts, :search_attributes), converter),
       request_id: Keyword.get(opts, :request_id, ""),
       identity: Keyword.get(opts, :identity, ""),
       cron_schedule: Keyword.get(opts, :cron_schedule, "")
