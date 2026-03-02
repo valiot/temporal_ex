@@ -8,6 +8,7 @@ defmodule TemporalEx.MixProject do
       elixir: "~> 1.15",
       start_permanent: Mix.env() == :prod,
       description: "Ergonomic Temporal client SDK for Elixir",
+      package: package(),
       deps: deps(),
       dialyzer: [plt_add_apps: [:ex_unit]],
       elixirc_paths: elixirc_paths(Mix.env())
@@ -18,6 +19,13 @@ defmodule TemporalEx.MixProject do
     [
       extra_applications: [:logger],
       mod: {TemporalEx.Application, []}
+    ]
+  end
+
+  defp package do
+    [
+      licenses: ["MIT"],
+      links: %{"GitHub" => "https://github.com/valiot/temporal_ex"}
     ]
   end
 
