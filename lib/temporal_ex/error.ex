@@ -9,6 +9,8 @@ defmodule TemporalEx.Error do
   @type t ::
           %__MODULE__.WorkflowAlreadyStarted{}
           | %__MODULE__.WorkflowNotFound{}
+          | %__MODULE__.ScheduleAlreadyExists{}
+          | %__MODULE__.ScheduleNotFound{}
           | %__MODULE__.NamespaceNotFound{}
           | %__MODULE__.QueryFailed{}
           | %__MODULE__.RPCError{}
@@ -33,6 +35,18 @@ defmodule TemporalEx.Error do
             run_id: String.t() | nil,
             message: String.t()
           }
+  end
+
+  defmodule ScheduleAlreadyExists do
+    @moduledoc "Raised when creating a schedule whose ID already exists."
+    defstruct [:schedule_id, :message]
+    @type t :: %__MODULE__{schedule_id: String.t() | nil, message: String.t()}
+  end
+
+  defmodule ScheduleNotFound do
+    @moduledoc "Raised when the referenced schedule does not exist."
+    defstruct [:schedule_id, :message]
+    @type t :: %__MODULE__{schedule_id: String.t() | nil, message: String.t()}
   end
 
   defmodule NamespaceNotFound do
@@ -81,7 +95,11 @@ defmodule TemporalEx.Error do
 
   # gRPC status 6 = ALREADY_EXISTS
   defp parse_by_status(6, message) do
-    %WorkflowAlreadyStarted{message: message}
+    if message =~ ~r/schedule/i do
+      %ScheduleAlreadyExists{message: message}
+    else
+      %WorkflowAlreadyStarted{message: message}
+    end
   end
 
   # gRPC status 5 = NOT_FOUND
@@ -89,6 +107,9 @@ defmodule TemporalEx.Error do
     cond do
       message =~ ~r/namespace/i ->
         %NamespaceNotFound{message: message}
+
+      message =~ ~r/schedule/i ->
+        %ScheduleNotFound{message: message}
 
       true ->
         %WorkflowNotFound{message: message}

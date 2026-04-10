@@ -26,8 +26,8 @@ defmodule TemporalEx do
       {:ok, result} = TemporalEx.WorkflowHandle.result(handle)
   """
 
-  alias TemporalEx.{Client, WorkflowHandle}
-  alias TemporalEx.Converter.{Common, Payload}
+  alias TemporalEx.{Client, WorkflowHandle, ScheduleHandle}
+  alias TemporalEx.Converter.{Common, Payload, Schedule}
   alias TemporalEx.Error
 
   @doc """
@@ -297,6 +297,155 @@ defmodule TemporalEx do
     case Client.rpc(client, :get_system_info, request) do
       {:ok, response} -> {:ok, response}
       {:error, err} -> {:error, Error.from_rpc_error(err)}
+    end
+  end
+
+  # ── Schedules ──────────────────────────────────────────────────────
+
+  @doc """
+  Creates a new Temporal Schedule.
+
+  ## Arguments
+
+    * `client` — Client pid or registered name
+    * `schedule_id` — Unique schedule identifier
+    * `opts` — Schedule configuration
+
+  ## Options (required)
+
+    * `:spec` — When the schedule triggers (keyword list):
+      * `:intervals` — List of interval specs: `[[every: 60]]` (seconds) or `[[every: 60, offset: 10]]`
+      * `:calendars` — List of calendar specs: `[[hour: "8", minute: "30"]]`
+      * `:cron_expressions` — List of cron strings: `["0 */5 * * *"]`
+      * `:timezone` — Timezone name: `"America/Chicago"`
+      * `:jitter` — Max random jitter in seconds
+      * `:start_time` / `:end_time` — `DateTime` bounds
+
+    * `:action` — What to run (keyword list):
+      * `:workflow_type` — Workflow type name (required)
+      * `:workflow_id` — Workflow ID (required)
+      * `:task_queue` — Task queue name (required)
+      * `:args` — List of workflow arguments
+
+  ## Options (optional)
+
+    * `:policies` — Scheduling policies (keyword list):
+      * `:overlap_policy` — `:skip`, `:buffer_one`, `:buffer_all`, `:cancel_other`, `:terminate_other`, `:allow_all`
+      * `:catchup_window` — Seconds
+      * `:pause_on_failure` — Boolean
+
+    * `:state` — Initial state:
+      * `:paused` — Boolean
+      * `:notes` — String
+
+    * `:memo` — Map of memo fields
+    * `:search_attributes` — Map of search attributes
+    * `:identity` — Caller identity
+    * `:request_id` — Idempotency key
+
+  ## Examples
+
+      {:ok, handle} = TemporalEx.create_schedule(client, "my-schedule",
+        spec: [intervals: [[every: 60]]],
+        action: [
+          workflow_type: "MyWorkflow",
+          workflow_id: "my-workflow",
+          task_queue: "my-queue",
+          args: [%{key: "value"}]
+        ],
+        policies: [overlap_policy: :skip]
+      )
+  """
+  @spec create_schedule(GenServer.server(), String.t(), keyword()) ::
+          {:ok, ScheduleHandle.t()} | {:error, Error.t()}
+  def create_schedule(client, schedule_id, opts) when is_list(opts) do
+    converter = Client.data_converter(client)
+    namespace = Keyword.get(opts, :namespace) || Client.namespace(client)
+
+    schedule_opts =
+      [
+        spec: Keyword.get(opts, :spec),
+        action: Keyword.get(opts, :action),
+        policies: Keyword.get(opts, :policies),
+        state: Keyword.get(opts, :state)
+      ]
+      |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+
+    request = %Temporal.Api.Workflowservice.V1.CreateScheduleRequest{
+      namespace: namespace,
+      schedule_id: schedule_id,
+      schedule: Schedule.to_schedule(schedule_opts, converter),
+      memo: Common.to_memo(Keyword.get(opts, :memo), converter),
+      search_attributes:
+        Common.to_search_attributes(Keyword.get(opts, :search_attributes), converter),
+      identity: Keyword.get(opts, :identity, ""),
+      request_id: Keyword.get(opts, :request_id, "")
+    }
+
+    case Client.rpc(client, :create_schedule, request, namespace: namespace) do
+      {:ok, _response} ->
+        handle = %ScheduleHandle{
+          client: client,
+          schedule_id: schedule_id,
+          namespace: namespace
+        }
+
+        {:ok, handle}
+
+      {:error, err} ->
+        {:error, Error.from_rpc_error(err)}
+    end
+  end
+
+  @doc """
+  Returns a `ScheduleHandle` for an existing schedule.
+
+  This does not make any RPC calls — it simply creates the handle struct.
+
+  ## Examples
+
+      handle = TemporalEx.get_schedule_handle(client, "my-schedule")
+      {:ok, desc} = TemporalEx.ScheduleHandle.describe(handle)
+  """
+  @spec get_schedule_handle(GenServer.server(), String.t()) :: ScheduleHandle.t()
+  def get_schedule_handle(client, schedule_id) do
+    %ScheduleHandle{
+      client: client,
+      schedule_id: schedule_id,
+      namespace: Client.namespace(client)
+    }
+  end
+
+  @doc """
+  Lists schedules matching an optional query.
+
+  ## Options
+
+    * `:page_size` — Maximum results per page (default: 100)
+    * `:next_page_token` — Pagination token
+
+  ## Examples
+
+      {:ok, schedules, token} = TemporalEx.list_schedules(client)
+  """
+  @spec list_schedules(GenServer.server(), keyword()) ::
+          {:ok, list(), binary()} | {:error, Error.t()}
+  def list_schedules(client, opts \\ []) do
+    namespace = Keyword.get(opts, :namespace) || Client.namespace(client)
+
+    request = %Temporal.Api.Workflowservice.V1.ListSchedulesRequest{
+      namespace: namespace,
+      maximum_page_size: Keyword.get(opts, :page_size, 100),
+      next_page_token: Keyword.get(opts, :next_page_token, ""),
+      query: Keyword.get(opts, :query, "")
+    }
+
+    case Client.rpc(client, :list_schedules, request, namespace: namespace) do
+      {:ok, response} ->
+        {:ok, response.schedules, response.next_page_token}
+
+      {:error, err} ->
+        {:error, Error.from_rpc_error(err)}
     end
   end
 end
