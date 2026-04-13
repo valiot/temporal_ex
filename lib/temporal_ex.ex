@@ -379,7 +379,7 @@ defmodule TemporalEx do
       search_attributes:
         Common.to_search_attributes(Keyword.get(opts, :search_attributes), converter),
       identity: Keyword.get(opts, :identity, ""),
-      request_id: Keyword.get(opts, :request_id, "")
+      request_id: Keyword.get_lazy(opts, :request_id, &generate_request_id/0)
     }
 
     case Client.rpc(client, :create_schedule, request, namespace: namespace) do
@@ -447,5 +447,9 @@ defmodule TemporalEx do
       {:error, err} ->
         {:error, Error.from_rpc_error(err)}
     end
+  end
+
+  defp generate_request_id do
+    Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
   end
 end
