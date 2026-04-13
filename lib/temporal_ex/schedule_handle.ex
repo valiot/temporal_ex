@@ -9,6 +9,7 @@ defmodule TemporalEx.ScheduleHandle do
   """
 
   alias TemporalEx.Client
+  alias TemporalEx.Converter.Common
   alias TemporalEx.Converter.Schedule, as: ScheduleConverter
   alias TemporalEx.Error
 
@@ -51,6 +52,7 @@ defmodule TemporalEx.ScheduleHandle do
     * `:identity` — Caller identity
     * `:request_id` — Idempotency key
     * `:search_attributes` — Map of search attribute fields
+    * `:memo` — Map of memo fields
   """
   @spec update(t(), keyword()) :: :ok | {:error, Error.t()}
   def update(%__MODULE__{} = handle, opts \\ []) do
@@ -62,7 +64,10 @@ defmodule TemporalEx.ScheduleHandle do
       schedule: ScheduleConverter.to_schedule(Keyword.fetch!(opts, :schedule), converter),
       conflict_token: Keyword.get(opts, :conflict_token, ""),
       identity: Keyword.get(opts, :identity, ""),
-      request_id: Keyword.get(opts, :request_id, "")
+      request_id: Keyword.get(opts, :request_id, ""),
+      search_attributes:
+        Common.to_search_attributes(Keyword.get(opts, :search_attributes), converter),
+      memo: Common.to_memo(Keyword.get(opts, :memo), converter)
     }
 
     case Client.rpc(handle.client, :update_schedule, request, rpc_opts(handle, opts)) do
