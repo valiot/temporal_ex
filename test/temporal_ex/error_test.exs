@@ -9,6 +9,16 @@ defmodule TemporalEx.ErrorTest do
       assert %Error.WorkflowAlreadyStarted{message: "Workflow already started"} = error
     end
 
+    test "maps ALREADY_EXISTS (6) with 'schedule' to ScheduleAlreadyExists" do
+      error = Error.from_rpc_error(%{status: 6, message: "Schedule already exists"})
+      assert %Error.ScheduleAlreadyExists{message: "Schedule already exists"} = error
+    end
+
+    test "maps NOT_FOUND (5) with 'schedule' to ScheduleNotFound" do
+      error = Error.from_rpc_error(%{status: 5, message: "Schedule not found: my-schedule"})
+      assert %Error.ScheduleNotFound{message: "Schedule not found: my-schedule"} = error
+    end
+
     test "maps NOT_FOUND (5) with 'namespace' to NamespaceNotFound" do
       error = Error.from_rpc_error(%{status: 5, message: "Namespace not found: test-ns"})
       assert %Error.NamespaceNotFound{message: "Namespace not found: test-ns"} = error
