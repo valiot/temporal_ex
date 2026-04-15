@@ -195,6 +195,7 @@ defmodule TemporalEx.Converter.Schedule do
   end
 
   defp to_trigger_immediately(nil), do: nil
+  defp to_trigger_immediately(false), do: nil
   defp to_trigger_immediately(true), do: %Temporal.Api.Schedule.V1.TriggerImmediatelyRequest{}
 
   defp to_trigger_immediately(opts) when is_list(opts) do

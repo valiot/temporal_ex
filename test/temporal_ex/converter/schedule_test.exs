@@ -273,6 +273,11 @@ defmodule TemporalEx.Converter.ScheduleTest do
       assert %Temporal.Api.Schedule.V1.TriggerImmediatelyRequest{} = result.trigger_immediately
     end
 
+    test "trigger_immediately: false is a no-op (no crash)" do
+      result = Schedule.to_schedule_patch(trigger_immediately: false)
+      assert result.trigger_immediately == nil
+    end
+
     test "builds a trigger_immediately patch with overlap_policy" do
       result = Schedule.to_schedule_patch(trigger_immediately: [overlap_policy: :allow_all])
       assert result.trigger_immediately.overlap_policy == :SCHEDULE_OVERLAP_POLICY_ALLOW_ALL
