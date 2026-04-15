@@ -151,8 +151,8 @@ handle = TemporalEx.get_schedule_handle(client, "my-schedule")
 
 ```elixir
 {:ok, description} = TemporalEx.ScheduleHandle.describe(handle)
-:ok              = TemporalEx.ScheduleHandle.pause(handle, "maintenance")
-:ok              = TemporalEx.ScheduleHandle.unpause(handle, "back online")
+:ok              = TemporalEx.ScheduleHandle.pause(handle, note: "maintenance")
+:ok              = TemporalEx.ScheduleHandle.unpause(handle, note: "back online")
 :ok              = TemporalEx.ScheduleHandle.trigger(handle)
 :ok              = TemporalEx.ScheduleHandle.update(handle, schedule: [...])
 :ok              = TemporalEx.ScheduleHandle.delete(handle)
