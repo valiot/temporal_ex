@@ -18,5 +18,3 @@
 - [New Feature] Workflow history retrieval via `TemporalEx.get_workflow_execution_history/3`.
 - [New Feature] Payload / data converter layer (`TemporalEx.Converter.Payload`, `TemporalEx.Converter.Common`) with protobuf construction hidden from callers.
 - [Fix] Ensured the workflow service stub module is loaded before checking exports.
-</content>
-</invoke>
