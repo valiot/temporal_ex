@@ -162,6 +162,33 @@ defmodule TemporalEx.ErrorTest do
     end
   end
 
+  # ── FAILED_PRECONDITION query fallback (symmetric to NOT_FOUND) ─────
+
+  describe "from_rpc_error/2 — FAILED_PRECONDITION query fallback" do
+    test "message mentioning 'query' still typed as QueryFailed when detail is missing" do
+      error =
+        Error.from_rpc_error(%{status: 9, message: "query failed: no handler registered"})
+
+      assert %Error.QueryFailed{message: "query failed: no handler registered"} = error
+    end
+
+    test "non-query message falls through to RPCError" do
+      error = Error.from_rpc_error(%{status: 9, message: "workflow is not in running state"})
+      assert %Error.RPCError{code: :failed_precondition} = error
+    end
+
+    test "typed QueryFailedFailure detail still wins" do
+      error =
+        Error.from_rpc_error(%{
+          status: 9,
+          message: "something went wrong",
+          details: [detail(@query_failed)]
+        })
+
+      assert %Error.QueryFailed{} = error
+    end
+  end
+
   # ── No context, no details — generic fallbacks ──────────────────────
 
   describe "from_rpc_error/2 — no context, no details" do

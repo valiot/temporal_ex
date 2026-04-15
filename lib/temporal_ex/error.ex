@@ -176,10 +176,20 @@ defmodule TemporalEx.Error do
 
   # gRPC status 9 = FAILED_PRECONDITION (used for query failures)
   defp parse_by_status(9, message, details, _context) do
-    if has_detail?(details, @query_failed) do
-      %QueryFailed{message: message}
-    else
-      %RPCError{code: :failed_precondition, message: message, details: details_or_nil(details)}
+    cond do
+      has_detail?(details, @query_failed) ->
+        %QueryFailed{message: message}
+
+      # Guarded fallback for the same intermediary-strips-trailers case
+      # handled in NOT_FOUND: when the typed `QueryFailedFailure` detail
+      # is missing but the message explicitly mentions query, prefer the
+      # typed QueryFailed struct so callers' pattern matches keep working.
+      # Word-boundary-matched to avoid arbitrary-substring collisions.
+      message =~ ~r/\bquery\b/i ->
+        %QueryFailed{message: message}
+
+      true ->
+        %RPCError{code: :failed_precondition, message: message, details: details_or_nil(details)}
     end
   end
 
