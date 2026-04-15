@@ -108,25 +108,41 @@ defmodule TemporalEx.ScheduleHandle do
   @doc """
   Pauses the schedule.
 
+  The second argument may be either a note string or a keyword list of
+  request options. This lets callers supply options while keeping the
+  default note.
+
   ## Examples
 
+      :ok = TemporalEx.ScheduleHandle.pause(handle)
       :ok = TemporalEx.ScheduleHandle.pause(handle, "Pausing for maintenance")
+      :ok = TemporalEx.ScheduleHandle.pause(handle, identity: "ops")
+      :ok = TemporalEx.ScheduleHandle.pause(handle, "Pausing", identity: "ops")
   """
-  @spec pause(t(), String.t(), keyword()) :: :ok | {:error, Error.t()}
-  def pause(%__MODULE__{} = handle, note \\ "paused", opts \\ []) do
-    patch(handle, Keyword.merge(opts, pause: note))
+  @spec pause(t(), String.t() | keyword(), keyword()) :: :ok | {:error, Error.t()}
+  def pause(handle, note_or_opts \\ "paused", opts \\ [])
+
+  def pause(%__MODULE__{} = handle, note_or_opts, opts) do
+    patch(handle, pause_opts(note_or_opts, opts))
   end
 
   @doc """
   Unpauses the schedule.
 
+  The second argument may be either a note string or a keyword list of
+  request options (see `pause/3`).
+
   ## Examples
 
+      :ok = TemporalEx.ScheduleHandle.unpause(handle)
       :ok = TemporalEx.ScheduleHandle.unpause(handle, "Resuming after maintenance")
+      :ok = TemporalEx.ScheduleHandle.unpause(handle, identity: "ops")
   """
-  @spec unpause(t(), String.t(), keyword()) :: :ok | {:error, Error.t()}
-  def unpause(%__MODULE__{} = handle, note \\ "unpaused", opts \\ []) do
-    patch(handle, Keyword.merge(opts, unpause: note))
+  @spec unpause(t(), String.t() | keyword(), keyword()) :: :ok | {:error, Error.t()}
+  def unpause(handle, note_or_opts \\ "unpaused", opts \\ [])
+
+  def unpause(%__MODULE__{} = handle, note_or_opts, opts) do
+    patch(handle, unpause_opts(note_or_opts, opts))
   end
 
   @doc """
@@ -212,5 +228,34 @@ defmodule TemporalEx.ScheduleHandle do
       {:ok, map} when map == %{} -> %Temporal.Api.Common.V1.Memo{fields: %{}}
       {:ok, map} -> Common.to_memo(map, converter)
     end
+  end
+
+  # Builds the patch keyword list for pause/unpause when the second
+  # positional argument may be either a note string or a keyword list
+  # of request options. A bare keyword list is treated as options with
+  # the default note, so `pause(handle, timeout: 5_000)` behaves as
+  # intuition expects instead of smuggling the keyword list into the
+  # protobuf `pause` string field.
+
+  @doc false
+  def pause_opts(note_or_opts, opts)
+
+  def pause_opts(opts_keyword, extra_opts) when is_list(opts_keyword) do
+    Keyword.merge(extra_opts, Keyword.put(opts_keyword, :pause, "paused"))
+  end
+
+  def pause_opts(note, opts) when is_binary(note) do
+    Keyword.put(opts, :pause, note)
+  end
+
+  @doc false
+  def unpause_opts(note_or_opts, opts)
+
+  def unpause_opts(opts_keyword, extra_opts) when is_list(opts_keyword) do
+    Keyword.merge(extra_opts, Keyword.put(opts_keyword, :unpause, "unpaused"))
+  end
+
+  def unpause_opts(note, opts) when is_binary(note) do
+    Keyword.put(opts, :unpause, note)
   end
 end
