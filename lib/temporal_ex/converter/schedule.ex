@@ -30,12 +30,18 @@ defmodule TemporalEx.Converter.Schedule do
   ## Options
 
     * `:intervals` — List of interval specs `[every: seconds]` or `[every: seconds, offset: seconds]`
-    * `:calendars` — List of calendar spec keyword lists
+    * `:calendars` — List of (deprecated string-based) calendar spec keyword lists
+    * `:structured_calendars` — List of structured calendar spec keyword lists (see `to_structured_calendar_spec/1`)
+    * `:exclude_calendars` — List of (deprecated string-based) calendar specs to exclude (blackout windows)
+    * `:exclude_structured_calendars` — List of structured calendar specs to exclude
     * `:cron_expressions` — List of cron expression strings
     * `:start_time` — `DateTime` when the schedule becomes active
     * `:end_time` — `DateTime` when the schedule stops
     * `:jitter` — Max random jitter in seconds
     * `:timezone` — Timezone name string (e.g., `"America/Chicago"`)
+
+  Exclusion fields mark blackout windows: the schedule does **not** fire
+  when the current time matches an excluded calendar.
   """
   def to_schedule_spec(nil), do: nil
 
@@ -43,6 +49,14 @@ defmodule TemporalEx.Converter.Schedule do
     %Temporal.Api.Schedule.V1.ScheduleSpec{
       interval: Keyword.get(opts, :intervals, []) |> Enum.map(&to_interval_spec/1),
       calendar: Keyword.get(opts, :calendars, []) |> Enum.map(&to_calendar_spec/1),
+      structured_calendar:
+        Keyword.get(opts, :structured_calendars, [])
+        |> Enum.map(&to_structured_calendar_spec/1),
+      exclude_calendar:
+        Keyword.get(opts, :exclude_calendars, []) |> Enum.map(&to_calendar_spec/1),
+      exclude_structured_calendar:
+        Keyword.get(opts, :exclude_structured_calendars, [])
+        |> Enum.map(&to_structured_calendar_spec/1),
       cron_string: Keyword.get(opts, :cron_expressions, []),
       start_time: Common.to_timestamp(Keyword.get(opts, :start_time)),
       end_time: Common.to_timestamp(Keyword.get(opts, :end_time)),
@@ -93,6 +107,54 @@ defmodule TemporalEx.Converter.Schedule do
       day_of_week: Keyword.get(opts, :day_of_week, ""),
       comment: Keyword.get(opts, :comment, "")
     }
+  end
+
+  @doc """
+  Builds a `Temporal.Api.Schedule.V1.StructuredCalendarSpec` from keyword options.
+
+  Each field accepts a list of ranges (see `to_range/1`), for example
+  `minute: [[start: 0, end: 59, step: 5]]` or a shorthand `hour: [9]` meaning
+  "exactly hour 9".
+
+  ## Options
+
+    * `:second`, `:minute`, `:hour`
+    * `:day_of_month`, `:month`, `:year`
+    * `:day_of_week` (0 = Sunday, 6 = Saturday)
+    * `:comment`
+  """
+  def to_structured_calendar_spec(opts) when is_list(opts) do
+    %Temporal.Api.Schedule.V1.StructuredCalendarSpec{
+      second: Keyword.get(opts, :second, []) |> Enum.map(&to_range/1),
+      minute: Keyword.get(opts, :minute, []) |> Enum.map(&to_range/1),
+      hour: Keyword.get(opts, :hour, []) |> Enum.map(&to_range/1),
+      day_of_month: Keyword.get(opts, :day_of_month, []) |> Enum.map(&to_range/1),
+      month: Keyword.get(opts, :month, []) |> Enum.map(&to_range/1),
+      year: Keyword.get(opts, :year, []) |> Enum.map(&to_range/1),
+      day_of_week: Keyword.get(opts, :day_of_week, []) |> Enum.map(&to_range/1),
+      comment: Keyword.get(opts, :comment, "")
+    }
+  end
+
+  @doc """
+  Builds a `Temporal.Api.Schedule.V1.Range`.
+
+  Accepts a keyword list with `:start`, `:end` (defaults to `:start`), and
+  `:step` (defaults to 1), or a bare integer as shorthand for an exact match
+  (`5` is equivalent to `[start: 5, end: 5, step: 1]`).
+  """
+  def to_range(opts) when is_list(opts) do
+    start = Keyword.fetch!(opts, :start)
+
+    %Temporal.Api.Schedule.V1.Range{
+      start: start,
+      end: Keyword.get(opts, :end, start),
+      step: Keyword.get(opts, :step, 1)
+    }
+  end
+
+  def to_range(value) when is_integer(value) do
+    %Temporal.Api.Schedule.V1.Range{start: value, end: value, step: 1}
   end
 
   @doc """

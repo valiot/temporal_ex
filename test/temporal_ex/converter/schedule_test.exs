@@ -87,8 +87,93 @@ defmodule TemporalEx.Converter.ScheduleTest do
       result = Schedule.to_schedule_spec([])
       assert result.interval == []
       assert result.calendar == []
+      assert result.structured_calendar == []
+      assert result.exclude_calendar == []
+      assert result.exclude_structured_calendar == []
       assert result.cron_string == []
       assert result.timezone_name == ""
+    end
+
+    test "builds exclude_calendars (deprecated string-based)" do
+      result = Schedule.to_schedule_spec(exclude_calendars: [[hour: "2", minute: "0"]])
+
+      assert [%Temporal.Api.Schedule.V1.CalendarSpec{hour: "2", minute: "0"}] =
+               result.exclude_calendar
+    end
+
+    test "builds exclude_structured_calendars" do
+      result =
+        Schedule.to_schedule_spec(
+          exclude_structured_calendars: [[hour: [[start: 2, end: 4]], day_of_week: [0]]]
+        )
+
+      assert [%Temporal.Api.Schedule.V1.StructuredCalendarSpec{hour: hours, day_of_week: dow}] =
+               result.exclude_structured_calendar
+
+      assert [%Temporal.Api.Schedule.V1.Range{start: 2, end: 4, step: 1}] = hours
+      assert [%Temporal.Api.Schedule.V1.Range{start: 0, end: 0, step: 1}] = dow
+    end
+
+    test "builds inclusive structured_calendars" do
+      result =
+        Schedule.to_schedule_spec(
+          structured_calendars: [[minute: [[start: 0, end: 59, step: 15]]]]
+        )
+
+      assert [%Temporal.Api.Schedule.V1.StructuredCalendarSpec{minute: minutes}] =
+               result.structured_calendar
+
+      assert [%Temporal.Api.Schedule.V1.Range{start: 0, end: 59, step: 15}] = minutes
+    end
+  end
+
+  # ── to_range/1 ────────────────────────────────────────────────────
+
+  describe "to_range/1" do
+    test "builds from keyword list with start/end/step" do
+      result = Schedule.to_range(start: 0, end: 59, step: 5)
+      assert %Temporal.Api.Schedule.V1.Range{start: 0, end: 59, step: 5} = result
+    end
+
+    test "defaults :end to :start and :step to 1" do
+      result = Schedule.to_range(start: 9)
+      assert %Temporal.Api.Schedule.V1.Range{start: 9, end: 9, step: 1} = result
+    end
+
+    test "bare integer is an exact match" do
+      result = Schedule.to_range(5)
+      assert %Temporal.Api.Schedule.V1.Range{start: 5, end: 5, step: 1} = result
+    end
+  end
+
+  # ── to_structured_calendar_spec/1 ─────────────────────────────────
+
+  describe "to_structured_calendar_spec/1" do
+    test "encodes each field as a list of ranges" do
+      result =
+        Schedule.to_structured_calendar_spec(
+          hour: [9, [start: 14, end: 16]],
+          day_of_week: [1, 2, 3, 4, 5]
+        )
+
+      assert [
+               %Temporal.Api.Schedule.V1.Range{start: 9, end: 9, step: 1},
+               %Temporal.Api.Schedule.V1.Range{start: 14, end: 16, step: 1}
+             ] = result.hour
+
+      assert length(result.day_of_week) == 5
+    end
+
+    test "defaults all fields to empty lists and blank comment" do
+      result = Schedule.to_structured_calendar_spec([])
+      assert result.second == []
+      assert result.minute == []
+      assert result.hour == []
+      assert result.day_of_month == []
+      assert result.month == []
+      assert result.year == []
+      assert result.day_of_week == []
+      assert result.comment == ""
     end
   end
 
