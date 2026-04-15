@@ -150,6 +150,19 @@ defmodule TemporalEx.Error do
       has_detail?(details, @namespace_not_found) ->
         %NamespaceNotFound{message: message}
 
+      # Guarded fallback for cases where the `grpc-status-details-bin` trailer
+      # is absent on the client — typically caused by gRPC intermediaries
+      # (Envoy/nginx terminations that re-serialize without preserving
+      # trailers, gRPC-Web bridges, gRPC-to-JSON gateways, mesh sidecars with
+      # custom filters) or by a decode failure higher up the stack. Every
+      # workflow/schedule RPC carries a namespace, so a missing namespace
+      # surfaces as NOT_FOUND on any call; when the message explicitly
+      # mentions it, prefer NamespaceNotFound over the caller's operation
+      # context. Word-boundary-matched to avoid collisions with arbitrary
+      # substrings.
+      message =~ ~r/\bnamespace\b/i ->
+        %NamespaceNotFound{message: message}
+
       context == :workflow ->
         %WorkflowNotFound{message: message}
 

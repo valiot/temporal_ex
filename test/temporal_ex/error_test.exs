@@ -108,6 +108,60 @@ defmodule TemporalEx.ErrorTest do
     end
   end
 
+  # ── Namespace fallback when typed details are stripped ──────────────
+
+  describe "from_rpc_error/2 — NOT_FOUND namespace fallback" do
+    # When the `grpc-status-details-bin` trailer is stripped by an
+    # intermediary (proxy re-serialization, gRPC-Web bridge, gRPC-to-JSON
+    # gateway, etc.) the typed failure detail is missing. Because every
+    # workflow/schedule RPC carries a namespace, a missing namespace
+    # surfaces as status 5 on any call and must not be silently
+    # reclassified as a workflow or schedule not-found.
+    test "message mentioning 'namespace' beats :workflow context" do
+      error =
+        Error.from_rpc_error(
+          %{status: 5, message: "Namespace 'prod' not found."},
+          context: :workflow
+        )
+
+      assert %Error.NamespaceNotFound{} = error
+    end
+
+    test "message mentioning 'namespace' beats :schedule context" do
+      error =
+        Error.from_rpc_error(
+          %{status: 5, message: "Namespace 'prod' not found."},
+          context: :schedule
+        )
+
+      assert %Error.NamespaceNotFound{} = error
+    end
+
+    test "typed NamespaceNotFoundFailure detail still wins over context" do
+      error =
+        Error.from_rpc_error(
+          %{
+            status: 5,
+            message: "not found",
+            details: [detail(@namespace_not_found)]
+          },
+          context: :workflow
+        )
+
+      assert %Error.NamespaceNotFound{} = error
+    end
+
+    test "context still wins when message does not mention namespace" do
+      error =
+        Error.from_rpc_error(
+          %{status: 5, message: "workflow execution not found"},
+          context: :workflow
+        )
+
+      assert %Error.WorkflowNotFound{} = error
+    end
+  end
+
   # ── No context, no details — generic fallbacks ──────────────────────
 
   describe "from_rpc_error/2 — no context, no details" do
