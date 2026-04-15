@@ -6,7 +6,6 @@
 - [New Feature] Added `TemporalEx.ScheduleHandle` struct for referencing an existing schedule.
 - [New Feature] Added `TemporalEx.Converter.Schedule` to encode schedule options into the Temporal RPC request.
 - [New Feature] Added schedule-related error variants to `TemporalEx.Error`.
-- [Fix] `create_schedule/3` now generates a random `request_id` when the caller does not supply one, making the RPC safely retryable by default. Previously the field defaulted to `""`, which disabled Temporal's server-side idempotency check and could surface as duplicate-create errors on transient retries.
 - [Improvement] `TemporalEx.Error.from_rpc_error/2` now classifies `ALREADY_EXISTS` / `NOT_FOUND` status codes using structured gRPC error details (`WorkflowExecutionAlreadyStartedFailure`, `NamespaceNotFoundFailure`, `QueryFailedFailure`) plus a caller-supplied `:context` option (`:workflow` / `:schedule`) rather than substring-matching the error message. Previously a workflow whose id contained the word "schedule" (e.g. `daily-schedule-sync`) could be misclassified as a schedule error, breaking caller pattern matches.
 - [Improvement] Refreshed dependencies.
 - [Improvement] Expanded README with schedule usage examples.

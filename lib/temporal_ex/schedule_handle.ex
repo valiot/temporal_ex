@@ -64,7 +64,7 @@ defmodule TemporalEx.ScheduleHandle do
       schedule: ScheduleConverter.to_schedule(Keyword.fetch!(opts, :schedule), converter),
       conflict_token: Keyword.get(opts, :conflict_token, ""),
       identity: Keyword.get(opts, :identity, ""),
-      request_id: Keyword.get(opts, :request_id, ""),
+      request_id: Keyword.get_lazy(opts, :request_id, &Common.request_id/0),
       search_attributes:
         Common.to_search_attributes(Keyword.get(opts, :search_attributes), converter),
       memo: Common.to_memo(Keyword.get(opts, :memo), converter)
@@ -95,7 +95,7 @@ defmodule TemporalEx.ScheduleHandle do
       schedule_id: handle.schedule_id,
       patch: ScheduleConverter.to_schedule_patch(opts),
       identity: Keyword.get(opts, :identity, ""),
-      request_id: Keyword.get(opts, :request_id, "")
+      request_id: Keyword.get_lazy(opts, :request_id, &Common.request_id/0)
     }
 
     case Client.rpc(handle.client, :patch_schedule, request, rpc_opts(handle, opts)) do
