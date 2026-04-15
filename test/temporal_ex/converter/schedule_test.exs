@@ -293,17 +293,20 @@ defmodule TemporalEx.Converter.ScheduleTest do
         Schedule.to_schedule_policies(
           overlap_policy: :buffer_one,
           catchup_window: 600,
-          pause_on_failure: true
+          pause_on_failure: true,
+          keep_original_workflow_id: true
         )
 
       assert result.overlap_policy == :SCHEDULE_OVERLAP_POLICY_BUFFER_ONE
       assert %Google.Protobuf.Duration{seconds: 600} = result.catchup_window
       assert result.pause_on_failure == true
+      assert result.keep_original_workflow_id == true
     end
 
-    test "defaults pause_on_failure to false" do
+    test "defaults pause_on_failure and keep_original_workflow_id to false" do
       result = Schedule.to_schedule_policies([])
       assert result.pause_on_failure == false
+      assert result.keep_original_workflow_id == false
     end
   end
 

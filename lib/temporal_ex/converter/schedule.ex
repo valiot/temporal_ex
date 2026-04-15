@@ -205,6 +205,10 @@ defmodule TemporalEx.Converter.Schedule do
     * `:overlap_policy` — Overlap policy atom (e.g., `:skip`, `:buffer_one`, `:cancel_other`, `:terminate_other`, `:allow_all`)
     * `:catchup_window` — Catchup window in seconds
     * `:pause_on_failure` — Boolean
+    * `:keep_original_workflow_id` — Boolean. When `true`, each scheduled run
+      uses the action's configured workflow ID verbatim instead of appending
+      a timestamp suffix. Required for deployments that rely on fixed
+      workflow IDs for conflict or reuse semantics.
   """
   def to_schedule_policies(nil), do: nil
 
@@ -212,7 +216,8 @@ defmodule TemporalEx.Converter.Schedule do
     %Temporal.Api.Schedule.V1.SchedulePolicies{
       overlap_policy: to_overlap_policy(Keyword.get(opts, :overlap_policy)),
       catchup_window: Common.to_duration(Keyword.get(opts, :catchup_window)),
-      pause_on_failure: Keyword.get(opts, :pause_on_failure, false)
+      pause_on_failure: Keyword.get(opts, :pause_on_failure, false),
+      keep_original_workflow_id: Keyword.get(opts, :keep_original_workflow_id, false)
     }
   end
 
