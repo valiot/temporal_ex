@@ -51,8 +51,10 @@ defmodule TemporalEx.ScheduleHandle do
     * `:conflict_token` — Conflict token from a previous describe (for optimistic locking)
     * `:identity` — Caller identity
     * `:request_id` — Idempotency key
-    * `:search_attributes` — Map of search attribute fields
-    * `:memo` — Map of memo fields
+    * `:search_attributes` — Map of search attribute fields. Omit (or pass `nil`)
+      to leave existing attributes untouched. Pass `%{}` to clear all attributes.
+    * `:memo` — Map of memo fields. Omit (or pass `nil`) to leave existing memo
+      untouched. Pass `%{}` to clear all memo fields.
   """
   @spec update(t(), keyword()) :: :ok | {:error, Error.t()}
   def update(%__MODULE__{} = handle, opts \\ []) do
@@ -65,9 +67,8 @@ defmodule TemporalEx.ScheduleHandle do
       conflict_token: Keyword.get(opts, :conflict_token, ""),
       identity: Keyword.get(opts, :identity, ""),
       request_id: Keyword.get_lazy(opts, :request_id, &Common.request_id/0),
-      search_attributes:
-        Common.to_search_attributes(Keyword.get(opts, :search_attributes), converter),
-      memo: Common.to_memo(Keyword.get(opts, :memo), converter)
+      search_attributes: update_search_attributes(opts, converter),
+      memo: update_memo(opts, converter)
     }
 
     case Client.rpc(handle.client, :update_schedule, request, rpc_opts(handle, opts)) do
@@ -185,6 +186,31 @@ defmodule TemporalEx.ScheduleHandle do
       Keyword.put(base, :timeout, timeout)
     else
       base
+    end
+  end
+
+  # Presence-aware encoding for UpdateScheduleRequest. Temporal distinguishes
+  # "field not set" (keep existing value) from "field set to empty message"
+  # (clear existing value), so we cannot collapse `%{}` to `nil` the way the
+  # shared `Common.to_*` helpers do.
+
+  @doc false
+  def update_search_attributes(opts, converter) do
+    case Keyword.fetch(opts, :search_attributes) do
+      :error -> nil
+      {:ok, nil} -> nil
+      {:ok, map} when map == %{} -> %Temporal.Api.Common.V1.SearchAttributes{indexed_fields: %{}}
+      {:ok, map} -> Common.to_search_attributes(map, converter)
+    end
+  end
+
+  @doc false
+  def update_memo(opts, converter) do
+    case Keyword.fetch(opts, :memo) do
+      :error -> nil
+      {:ok, nil} -> nil
+      {:ok, map} when map == %{} -> %Temporal.Api.Common.V1.Memo{fields: %{}}
+      {:ok, map} -> Common.to_memo(map, converter)
     end
   end
 end
