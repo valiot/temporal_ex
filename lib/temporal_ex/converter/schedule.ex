@@ -109,12 +109,26 @@ defmodule TemporalEx.Converter.Schedule do
     }
   end
 
+  # Wildcard ranges per Temporal calendar semantics: an empty range list
+  # matches nothing, so omitted fields must be filled with explicit
+  # wildcards. The defaults mirror cron — time fields default to 0
+  # (midnight), date fields to their full range — except `:year`, which
+  # is left empty (Temporal treats empty year as "all years").
+  @second_default [%Temporal.Api.Schedule.V1.Range{start: 0, end: 0, step: 1}]
+  @minute_default [%Temporal.Api.Schedule.V1.Range{start: 0, end: 0, step: 1}]
+  @hour_default [%Temporal.Api.Schedule.V1.Range{start: 0, end: 0, step: 1}]
+  @day_of_month_default [%Temporal.Api.Schedule.V1.Range{start: 1, end: 31, step: 1}]
+  @month_default [%Temporal.Api.Schedule.V1.Range{start: 1, end: 12, step: 1}]
+  @day_of_week_default [%Temporal.Api.Schedule.V1.Range{start: 0, end: 6, step: 1}]
+
   @doc """
   Builds a `Temporal.Api.Schedule.V1.StructuredCalendarSpec` from keyword options.
 
   Each field accepts a list of ranges (see `to_range/1`), for example
   `minute: [[start: 0, end: 59, step: 5]]` or a shorthand `hour: [9]` meaning
-  "exactly hour 9".
+  "exactly hour 9". Omitted (or empty-list) fields are filled with cron-style
+  wildcards so the spec actually matches: time fields default to `0`, date
+  fields to their full range, and `:year` defaults to "all years".
 
   ## Options
 
@@ -122,18 +136,35 @@ defmodule TemporalEx.Converter.Schedule do
     * `:day_of_month`, `:month`, `:year`
     * `:day_of_week` (0 = Sunday, 6 = Saturday)
     * `:comment`
+
+  ## Examples
+
+      # Every 15 minutes throughout each day, every day:
+      Schedule.to_structured_calendar_spec(minute: [[start: 0, end: 59, step: 15]])
+
+      # 09:30 every weekday:
+      Schedule.to_structured_calendar_spec(
+        hour: [9], minute: [30], day_of_week: [[start: 1, end: 5]]
+      )
   """
   def to_structured_calendar_spec(opts) when is_list(opts) do
     %Temporal.Api.Schedule.V1.StructuredCalendarSpec{
-      second: Keyword.get(opts, :second, []) |> Enum.map(&to_range/1),
-      minute: Keyword.get(opts, :minute, []) |> Enum.map(&to_range/1),
-      hour: Keyword.get(opts, :hour, []) |> Enum.map(&to_range/1),
-      day_of_month: Keyword.get(opts, :day_of_month, []) |> Enum.map(&to_range/1),
-      month: Keyword.get(opts, :month, []) |> Enum.map(&to_range/1),
+      second: ranges_or_default(opts, :second, @second_default),
+      minute: ranges_or_default(opts, :minute, @minute_default),
+      hour: ranges_or_default(opts, :hour, @hour_default),
+      day_of_month: ranges_or_default(opts, :day_of_month, @day_of_month_default),
+      month: ranges_or_default(opts, :month, @month_default),
       year: Keyword.get(opts, :year, []) |> Enum.map(&to_range/1),
-      day_of_week: Keyword.get(opts, :day_of_week, []) |> Enum.map(&to_range/1),
+      day_of_week: ranges_or_default(opts, :day_of_week, @day_of_week_default),
       comment: Keyword.get(opts, :comment, "")
     }
+  end
+
+  defp ranges_or_default(opts, key, default) do
+    case Keyword.get(opts, key, []) do
+      [] -> default
+      ranges -> Enum.map(ranges, &to_range/1)
+    end
   end
 
   @doc """

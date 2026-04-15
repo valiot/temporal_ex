@@ -164,16 +164,45 @@ defmodule TemporalEx.Converter.ScheduleTest do
       assert length(result.day_of_week) == 5
     end
 
-    test "defaults all fields to empty lists and blank comment" do
+    test "fills omitted fields with cron-style wildcards (would otherwise match nothing)" do
       result = Schedule.to_structured_calendar_spec([])
-      assert result.second == []
-      assert result.minute == []
-      assert result.hour == []
-      assert result.day_of_month == []
-      assert result.month == []
+
+      # Time fields default to midnight (single value 0).
+      assert [%Temporal.Api.Schedule.V1.Range{start: 0, end: 0, step: 1}] = result.second
+      assert [%Temporal.Api.Schedule.V1.Range{start: 0, end: 0, step: 1}] = result.minute
+      assert [%Temporal.Api.Schedule.V1.Range{start: 0, end: 0, step: 1}] = result.hour
+
+      # Date fields default to wildcard ranges.
+      assert [%Temporal.Api.Schedule.V1.Range{start: 1, end: 31, step: 1}] = result.day_of_month
+      assert [%Temporal.Api.Schedule.V1.Range{start: 1, end: 12, step: 1}] = result.month
+      assert [%Temporal.Api.Schedule.V1.Range{start: 0, end: 6, step: 1}] = result.day_of_week
+
+      # Year intentionally stays empty — Temporal treats that as "all years".
       assert result.year == []
-      assert result.day_of_week == []
       assert result.comment == ""
+    end
+
+    test "explicit-empty list also gets the wildcard fill" do
+      result = Schedule.to_structured_calendar_spec(hour: [], minute: [])
+      assert [%Temporal.Api.Schedule.V1.Range{start: 0, end: 0, step: 1}] = result.hour
+      assert [%Temporal.Api.Schedule.V1.Range{start: 0, end: 0, step: 1}] = result.minute
+    end
+
+    test "partial spec preserves caller's ranges and wildcards the rest" do
+      # Reviewer's example: should fire every 15 minutes, every day.
+      # With the previous empty-list behavior this matched nothing.
+      result =
+        Schedule.to_structured_calendar_spec(minute: [[start: 0, end: 59, step: 15]])
+
+      assert [%Temporal.Api.Schedule.V1.Range{start: 0, end: 59, step: 15}] = result.minute
+
+      # Every other field still gets its wildcard, so the spec actually
+      # matches.
+      assert [%Temporal.Api.Schedule.V1.Range{start: 0, end: 0}] = result.second
+      assert [%Temporal.Api.Schedule.V1.Range{start: 0, end: 0}] = result.hour
+      assert [%Temporal.Api.Schedule.V1.Range{start: 1, end: 31}] = result.day_of_month
+      assert [%Temporal.Api.Schedule.V1.Range{start: 1, end: 12}] = result.month
+      assert [%Temporal.Api.Schedule.V1.Range{start: 0, end: 6}] = result.day_of_week
     end
   end
 
