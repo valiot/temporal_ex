@@ -140,7 +140,7 @@ defmodule TemporalEx do
         {:ok, handle}
 
       {:error, err} ->
-        {:error, Error.from_rpc_error(err)}
+        {:error, Error.from_rpc_error(err, context: :workflow)}
     end
   end
 
@@ -220,7 +220,7 @@ defmodule TemporalEx do
         {:ok, handle}
 
       {:error, err} ->
-        {:error, Error.from_rpc_error(err)}
+        {:error, Error.from_rpc_error(err, context: :workflow)}
     end
   end
 
@@ -253,7 +253,7 @@ defmodule TemporalEx do
         {:ok, response.executions, response.next_page_token}
 
       {:error, err} ->
-        {:error, Error.from_rpc_error(err)}
+        {:error, Error.from_rpc_error(err, context: :workflow)}
     end
   end
 
@@ -279,7 +279,7 @@ defmodule TemporalEx do
         {:ok, response.count}
 
       {:error, err} ->
-        {:error, Error.from_rpc_error(err)}
+        {:error, Error.from_rpc_error(err, context: :workflow)}
     end
   end
 
@@ -393,7 +393,7 @@ defmodule TemporalEx do
         {:ok, handle}
 
       {:error, err} ->
-        {:error, Error.from_rpc_error(err)}
+        {:error, Error.from_rpc_error(err, context: :schedule)}
     end
   end
 
@@ -445,7 +445,7 @@ defmodule TemporalEx do
         {:ok, response.schedules, response.next_page_token}
 
       {:error, err} ->
-        {:error, Error.from_rpc_error(err)}
+        {:error, Error.from_rpc_error(err, context: :schedule)}
     end
   end
 

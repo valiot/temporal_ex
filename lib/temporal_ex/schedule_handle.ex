@@ -38,7 +38,7 @@ defmodule TemporalEx.ScheduleHandle do
 
     case Client.rpc(handle.client, :describe_schedule, request, rpc_opts(handle, opts)) do
       {:ok, response} -> {:ok, response}
-      {:error, err} -> {:error, Error.from_rpc_error(err)}
+      {:error, err} -> {:error, Error.from_rpc_error(err, context: :schedule)}
     end
   end
 
@@ -72,7 +72,7 @@ defmodule TemporalEx.ScheduleHandle do
 
     case Client.rpc(handle.client, :update_schedule, request, rpc_opts(handle, opts)) do
       {:ok, _response} -> :ok
-      {:error, err} -> {:error, Error.from_rpc_error(err)}
+      {:error, err} -> {:error, Error.from_rpc_error(err, context: :schedule)}
     end
   end
 
@@ -100,7 +100,7 @@ defmodule TemporalEx.ScheduleHandle do
 
     case Client.rpc(handle.client, :patch_schedule, request, rpc_opts(handle, opts)) do
       {:ok, _response} -> :ok
-      {:error, err} -> {:error, Error.from_rpc_error(err)}
+      {:error, err} -> {:error, Error.from_rpc_error(err, context: :schedule)}
     end
   end
 
@@ -163,7 +163,7 @@ defmodule TemporalEx.ScheduleHandle do
 
     case Client.rpc(handle.client, :delete_schedule, request, rpc_opts(handle, opts)) do
       {:ok, _response} -> :ok
-      {:error, err} -> {:error, Error.from_rpc_error(err)}
+      {:error, err} -> {:error, Error.from_rpc_error(err, context: :schedule)}
     end
   end
 

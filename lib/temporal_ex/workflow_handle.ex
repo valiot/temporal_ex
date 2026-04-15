@@ -37,7 +37,7 @@ defmodule TemporalEx.WorkflowHandle do
 
     case Client.rpc(handle.client, :describe_workflow_execution, request, rpc_opts(handle, opts)) do
       {:ok, response} -> {:ok, response}
-      {:error, err} -> {:error, Error.from_rpc_error(err)}
+      {:error, err} -> {:error, Error.from_rpc_error(err, context: :workflow)}
     end
   end
 
@@ -64,7 +64,7 @@ defmodule TemporalEx.WorkflowHandle do
 
     case Client.rpc(handle.client, :signal_workflow_execution, request, rpc_opts(handle, opts)) do
       {:ok, _response} -> :ok
-      {:error, err} -> {:error, Error.from_rpc_error(err)}
+      {:error, err} -> {:error, Error.from_rpc_error(err, context: :workflow)}
     end
   end
 
@@ -105,7 +105,7 @@ defmodule TemporalEx.WorkflowHandle do
         {:ok, result}
 
       {:error, err} ->
-        {:error, Error.from_rpc_error(err)}
+        {:error, Error.from_rpc_error(err, context: :workflow)}
     end
   end
 
@@ -134,7 +134,7 @@ defmodule TemporalEx.WorkflowHandle do
            rpc_opts(handle, opts)
          ) do
       {:ok, _response} -> :ok
-      {:error, err} -> {:error, Error.from_rpc_error(err)}
+      {:error, err} -> {:error, Error.from_rpc_error(err, context: :workflow)}
     end
   end
 
@@ -171,7 +171,7 @@ defmodule TemporalEx.WorkflowHandle do
 
     case Client.rpc(handle.client, :terminate_workflow_execution, request, rpc_opts(handle, opts)) do
       {:ok, _response} -> :ok
-      {:error, err} -> {:error, Error.from_rpc_error(err)}
+      {:error, err} -> {:error, Error.from_rpc_error(err, context: :workflow)}
     end
   end
 
@@ -187,7 +187,7 @@ defmodule TemporalEx.WorkflowHandle do
 
     case Client.rpc(handle.client, :delete_workflow_execution, request, rpc_opts(handle, opts)) do
       {:ok, _response} -> :ok
-      {:error, err} -> {:error, Error.from_rpc_error(err)}
+      {:error, err} -> {:error, Error.from_rpc_error(err, context: :workflow)}
     end
   end
 
@@ -232,7 +232,7 @@ defmodule TemporalEx.WorkflowHandle do
          }}
 
       {:error, err} ->
-        {:error, Error.from_rpc_error(err)}
+        {:error, Error.from_rpc_error(err, context: :workflow)}
     end
   end
 
@@ -268,7 +268,7 @@ defmodule TemporalEx.WorkflowHandle do
         extract_result_from_close_event(response, converter)
 
       {:error, err} ->
-        {:error, Error.from_rpc_error(err)}
+        {:error, Error.from_rpc_error(err, context: :workflow)}
     end
   end
 
@@ -295,7 +295,7 @@ defmodule TemporalEx.WorkflowHandle do
 
     case Client.rpc(handle.client, :reset_workflow_execution, request, rpc_opts(handle, opts)) do
       {:ok, response} -> {:ok, response.run_id}
-      {:error, err} -> {:error, Error.from_rpc_error(err)}
+      {:error, err} -> {:error, Error.from_rpc_error(err, context: :workflow)}
     end
   end
 
