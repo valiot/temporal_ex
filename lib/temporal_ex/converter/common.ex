@@ -4,6 +4,17 @@ defmodule TemporalEx.Converter.Common do
   """
 
   @doc """
+  Generates a fresh request ID suitable for Temporal RPC idempotency keys.
+
+  Returns 32 lowercase hex characters (128 bits of entropy from
+  `:crypto.strong_rand_bytes/1`).
+  """
+  @spec request_id() :: String.t()
+  def request_id do
+    Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)
+  end
+
+  @doc """
   Builds a `Temporal.Api.Common.V1.WorkflowType` struct.
   """
   def workflow_type(name) when is_binary(name) do

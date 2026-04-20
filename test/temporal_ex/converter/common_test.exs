@@ -3,6 +3,19 @@ defmodule TemporalEx.Converter.CommonTest do
 
   alias TemporalEx.Converter.Common
 
+  describe "request_id/0" do
+    test "returns 32 lowercase hex characters" do
+      id = Common.request_id()
+      assert is_binary(id)
+      assert String.length(id) == 32
+      assert id =~ ~r/^[0-9a-f]{32}$/
+    end
+
+    test "returns a different value each call" do
+      refute Common.request_id() == Common.request_id()
+    end
+  end
+
   describe "workflow_type/1" do
     test "builds a WorkflowType struct" do
       result = Common.workflow_type("MyWorkflow")

@@ -123,6 +123,68 @@ handle = TemporalEx.get_workflow_handle(client, "workflow-id", "run-id")
 {:ok, reset}     = TemporalEx.WorkflowHandle.reset(handle, opts)
 ```
 
+### Schedule Operations
+
+Temporal Schedules are server-side crons — Temporal starts workflow executions on the configured interval. The worker doesn't need to be running when the schedule is created; it just needs to be available to pick up workflow tasks from the queue.
+
+```elixir
+# Create a schedule that runs every 60 seconds
+{:ok, handle} = TemporalEx.create_schedule(client, "my-schedule",
+  spec: [intervals: [[every: 60]]],
+  action: [
+    workflow_type: "MyWorkflow",
+    workflow_id: "my-workflow",
+    task_queue: "my-queue",
+    args: [%{key: "value"}]
+  ],
+  policies: [overlap_policy: :skip]
+)
+
+# Get a handle to an existing schedule
+handle = TemporalEx.get_schedule_handle(client, "my-schedule")
+
+# List all schedules
+{:ok, schedules, next_token} = TemporalEx.list_schedules(client)
+```
+
+### ScheduleHandle Operations
+
+```elixir
+{:ok, description} = TemporalEx.ScheduleHandle.describe(handle)
+:ok              = TemporalEx.ScheduleHandle.pause(handle, note: "maintenance")
+:ok              = TemporalEx.ScheduleHandle.unpause(handle, note: "back online")
+:ok              = TemporalEx.ScheduleHandle.trigger(handle)
+:ok              = TemporalEx.ScheduleHandle.update(handle, schedule: [...])
+:ok              = TemporalEx.ScheduleHandle.delete(handle)
+```
+
+#### Schedule Spec Options
+
+```elixir
+# Interval-based (every N seconds, with optional offset)
+spec: [intervals: [[every: 60], [every: 300, offset: 10]]]
+
+# Calendar-based
+spec: [calendars: [[hour: "8", minute: "30", day_of_week: "MON-FRI"]]]
+
+# Cron expressions
+spec: [cron_expressions: ["0 */5 * * *"]]
+
+# With timezone and jitter
+spec: [intervals: [[every: 60]], timezone: "America/Chicago", jitter: 5]
+```
+
+#### Overlap Policies
+
+| Policy | Description |
+|--------|-------------|
+| `:skip` | Skip if previous is still running |
+| `:buffer_one` | Buffer one execution |
+| `:buffer_all` | Buffer all executions |
+| `:cancel_other` | Cancel the running execution |
+| `:terminate_other` | Terminate the running execution |
+| `:allow_all` | Allow concurrent executions |
+
 ### Visibility
 
 ```elixir
@@ -142,6 +204,8 @@ All errors are returned as typed structs:
 
 - `TemporalEx.Error.WorkflowAlreadyStarted`
 - `TemporalEx.Error.WorkflowNotFound`
+- `TemporalEx.Error.ScheduleAlreadyExists`
+- `TemporalEx.Error.ScheduleNotFound`
 - `TemporalEx.Error.NamespaceNotFound`
 - `TemporalEx.Error.QueryFailed`
 - `TemporalEx.Error.RPCError` (catch-all)
