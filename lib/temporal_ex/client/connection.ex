@@ -196,21 +196,43 @@ defmodule TemporalEx.Client.Connection do
     end
   end
 
+  @max_temp_pem_attempts 8
+
   defp write_temp_pem_file!(prefix, pem) do
+    do_write_temp_pem_file!(prefix, pem, @max_temp_pem_attempts)
+  end
+
+  defp do_write_temp_pem_file!(_prefix, _pem, 0) do
+    raise "could not allocate a unique temp PEM path after #{@max_temp_pem_attempts} attempts"
+  end
+
+  # `System.unique_integer/1` is process-local — two BEAMs running on
+  # the same host can independently pick the same counter and collide
+  # on the temp filename, raising `:eexist` here. Retry with a fresh
+  # name on collision so the cluster harness (which routinely spawns
+  # multiple BEAMs against the same Temporal cert) doesn't crash.
+  defp do_write_temp_pem_file!(prefix, pem, attempts) do
     path =
       Path.join(
         System.tmp_dir!(),
-        "#{prefix}-#{System.unique_integer([:positive])}.pem"
+        "#{prefix}-#{:os.getpid()}-#{System.unique_integer([:positive])}.pem"
       )
 
-    {:ok, file} = File.open(path, [:write, :exclusive, :binary])
+    case File.open(path, [:write, :exclusive, :binary]) do
+      {:ok, file} ->
+        try do
+          IO.binwrite(file, pem)
+          File.chmod!(path, 0o600)
+          path
+        after
+          File.close(file)
+        end
 
-    try do
-      IO.binwrite(file, pem)
-      File.chmod!(path, 0o600)
-      path
-    after
-      File.close(file)
+      {:error, :eexist} ->
+        do_write_temp_pem_file!(prefix, pem, attempts - 1)
+
+      {:error, reason} ->
+        raise "could not write temp PEM file #{path}: #{inspect(reason)}"
     end
   end
 
