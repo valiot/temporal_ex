@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## 0.2.1 [2026-05-21]
+
+- [Fix] `TemporalEx.Client.Connection.write_temp_pem_file!/2` no longer crashes with `MatchError {:error, :eexist}` when two BEAMs on the same host both initialize a Temporal client. The temp filename now includes `:os.getpid()` so independent BEAMs don't share the `System.unique_integer/1` suffix space, and the allocator retries on collision up to 8 attempts before raising. Non-`:eexist` errors now surface a real message instead of a `MatchError`. Surfaced while iterating on pipex's cluster harness, which boots three sibling BEAMs alongside the test process.
+
 ## 0.2.0 [2026-04-13]
 
 - [New Feature] Added `TemporalEx.create_schedule/3` for creating Temporal Schedules, returning a `TemporalEx.ScheduleHandle`. Supports interval, calendar, and cron specs; overlap / catchup / pause-on-failure policies; initial paused state; memos and search attributes.
