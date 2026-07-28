@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## 0.2.2 [2026-07-28]
+
+- [Fix] `TemporalEx.Client` drops a dead gRPC channel after mid-RPC gun death (`:down: :normal` / `:down: :noproc` / connection errors) so the next call re-runs `GRPC.Stub.connect`. Previously only a clean `{:gun_down, …}` cleared the channel; when the gun process died during an in-flight RPC the client kept the corpse and every subsequent call failed the same way until the GenServer was restarted.
+
 ## 0.2.1 [2026-05-21]
 
 - [Fix] `TemporalEx.Client.Connection.write_temp_pem_file!/2` no longer crashes with `MatchError {:error, :eexist}` when two BEAMs on the same host both initialize a Temporal client. The temp filename now includes `:os.getpid()` so independent BEAMs don't share the `System.unique_integer/1` suffix space, and the allocator retries on collision up to 8 attempts before raising. Non-`:eexist` errors now surface a real message instead of a `MatchError`. Surfaced while iterating on pipex's cluster harness, which boots three sibling BEAMs alongside the test process.

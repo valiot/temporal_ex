@@ -124,7 +124,11 @@ defmodule TemporalEx.Client do
         call_opts = if map_size(metadata) > 0, do: [metadata: metadata], else: []
 
         result = invoke_rpc(rpc_name, connected_state.channel, request, call_opts)
-        {:reply, result, connected_state}
+        # When gun dies mid-RPC (`:down: :normal` / `:down: :noproc`), the
+        # in-flight call returns an error *before* `{:gun_down, …}` is
+        # handled. If we keep the dead channel, every subsequent RPC reuses
+        # it and fails forever. Drop it so the next call re-connects.
+        {:reply, result, maybe_drop_dead_channel(connected_state, result)}
 
       {:error, reason, disconnected_state} ->
         {:reply, {:error, reason}, disconnected_state}
@@ -184,6 +188,28 @@ defmodule TemporalEx.Client do
     else
       {:error, "Unknown Temporal RPC: #{rpc_name}"}
     end
+  end
+
+  # Gun adapter maps `{:error, {:down, reason}}` / connection_error to
+  # `%GRPC.RPCError{status: unknown, message: ":down: :normal"}` (etc.).
+  # Those mean the channel process is gone — keep only errors that prove
+  # the transport itself died, not Temporal business failures (NOT_FOUND,
+  # ALREADY_EXISTS, …) which leave a live channel.
+  defp maybe_drop_dead_channel(state, {:error, %GRPC.RPCError{message: message}})
+       when is_binary(message) do
+    if transport_dead_message?(message) do
+      %{state | channel: nil}
+    else
+      state
+    end
+  end
+
+  defp maybe_drop_dead_channel(state, _result), do: state
+
+  defp transport_dead_message?(message) do
+    String.starts_with?(message, ":down:") or
+      String.starts_with?(message, ":connection_error:") or
+      String.contains?(message, "connection_error")
   end
 
   defp normalize_map(map) when is_map(map), do: map
