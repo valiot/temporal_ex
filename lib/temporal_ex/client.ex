@@ -96,7 +96,12 @@ defmodule TemporalEx.Client do
   # ── RPC (caller process) ────────────────────────────────────────────
 
   defp do_rpc(client, rpc_name, request, opts, timeout, retried?) do
-    case GenServer.call(client, {:checkout, opts}, @checkout_timeout) do
+    # Bound GenServer waits by the caller timeout so `timeout: 500` cannot
+    # sit 10s on a hung connect. Cap at @checkout_timeout so a large RPC
+    # timeout still can't pin the mailbox forever on connect.
+    gs_timeout = genserver_timeout(timeout)
+
+    case GenServer.call(client, {:checkout, opts}, gs_timeout) do
       {:ok, channel, call_opts} ->
         result = invoke_rpc(rpc_name, channel, request, put_timeout(call_opts, timeout))
 
@@ -104,7 +109,7 @@ defmodule TemporalEx.Client do
           true ->
             # Drop this channel (no-op if another caller already replaced it),
             # then retry the whole checkout+invoke once.
-            _ = GenServer.call(client, {:invalidate, channel}, @checkout_timeout)
+            _ = GenServer.call(client, {:invalidate, channel}, gs_timeout)
 
             case retried? do
               true -> result
@@ -119,6 +124,14 @@ defmodule TemporalEx.Client do
         {:error, reason}
     end
   end
+
+  # GenServer.call rejects 0; use 1ms as the floor for "already timed out".
+  defp genserver_timeout(:infinity), do: @checkout_timeout
+
+  defp genserver_timeout(timeout) when is_integer(timeout) and timeout > 0,
+    do: min(timeout, @checkout_timeout)
+
+  defp genserver_timeout(_), do: @checkout_timeout
 
   defp put_timeout(call_opts, timeout) when is_integer(timeout) and timeout > 0 do
     Keyword.put(call_opts, :timeout, timeout)
@@ -188,8 +201,14 @@ defmodule TemporalEx.Client do
   def handle_call({:invalidate, channel}, _from, state) do
     new_state =
       case same_channel?(state.channel, channel) do
-        true -> %{state | channel: nil}
-        false -> state
+        true ->
+          # Best-effort close: :down corpses are already dead; half-open
+          # connection_error blips would otherwise leak gun processes.
+          disconnect_channel(channel)
+          %{state | channel: nil}
+
+        false ->
+          state
       end
 
     {:reply, :ok, new_state}
@@ -208,9 +227,15 @@ defmodule TemporalEx.Client do
     {:noreply, state}
   end
 
+  # Only clear when the downed pid is the channel we currently hold. A late
+  # gun_down from a dead predecessor must not wipe a successful reconnect
+  # (and leak the new gun by dropping our only reference without disconnect).
   @impl true
-  def handle_info({:gun_down, _pid, :http2, _reason, _killed_streams}, state) do
-    {:noreply, %{state | channel: nil}}
+  def handle_info({:gun_down, pid, :http2, _reason, _killed_streams}, state) do
+    case channel_conn_pid(state.channel) do
+      ^pid -> {:noreply, %{state | channel: nil}}
+      _ -> {:noreply, state}
+    end
   end
 
   @impl true
@@ -265,14 +290,23 @@ defmodule TemporalEx.Client do
       String.contains?(message, "connection_error")
   end
 
-  defp same_channel?(
-         %{adapter_payload: %{conn_pid: a}},
-         %{adapter_payload: %{conn_pid: b}}
-       )
-       when is_pid(a) and is_pid(b),
-       do: a == b
+  defp same_channel?(left, right) do
+    case {channel_conn_pid(left), channel_conn_pid(right)} do
+      {a, b} when is_pid(a) and is_pid(b) -> a == b
+      _ -> false
+    end
+  end
 
-  defp same_channel?(_, _), do: false
+  defp channel_conn_pid(%{adapter_payload: %{conn_pid: pid}}) when is_pid(pid), do: pid
+  defp channel_conn_pid(_), do: nil
+
+  defp disconnect_channel(channel) do
+    _ = GRPC.Stub.disconnect(channel)
+    :ok
+  catch
+    # Already dead / half-closed / unexpected adapter payload — ignore.
+    _, _ -> :ok
+  end
 
   defp normalize_map(map) when is_map(map), do: map
   defp normalize_map(list) when is_list(list), do: Map.new(list)

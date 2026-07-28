@@ -130,18 +130,10 @@ defmodule TemporalEx.ClientTest do
       GenServer.stop(pid)
     end
 
-    test "transparent retry succeeds when reconnect yields a live channel" do
-      # First connect plants a dying gun; second connect plants a "live" one
-      # that completes the RPC via a stubbed connect_fun + a process that
-      # never answers would still fail — so we drive success by making the
-      # second connect return an error-shaped channel only after proving the
-      # retry path. Use connect_fun: attempt 1 = dying channel, attempt 2 =
-      # return {:error, :econnrefused} would not prove success.
-      #
-      # Instead: attempt 1 dies; attempt 2 returns a channel whose gun
-      # process answers nothing useful. Real success needs Temporal.
-      # Prove the *retry path* with a counter: connect is invoked twice per
-      # rpc when the first channel dies.
+    test "transport death triggers a second connect attempt on the same rpc" do
+      # Without a live Temporal we cannot assert a successful retry body;
+      # prove the retry *path* instead: connect is invoked twice per rpc
+      # when the first channel dies mid-RPC.
       {:ok, attempts} = Agent.start_link(fn -> 0 end)
 
       connect_fun = fn _server, _opts ->
@@ -152,8 +144,7 @@ defmodule TemporalEx.ClientTest do
             {:ok, dying_channel(hold_ms: 20, exit_reason: :normal)}
 
           _ ->
-            # Second checkout: pretend connect failed with a clear reason so
-            # the retry path is observable and deterministic without Temporal.
+            # Second checkout: deterministic connect failure without Temporal.
             {:error, :econnrefused}
         end
       end
@@ -168,6 +159,31 @@ defmodule TemporalEx.ClientTest do
       # checkout #1 (dying) + reconnect after invalidate = 2 connect attempts
       assert Agent.get(attempts, & &1) == 2
 
+      GenServer.stop(pid)
+    end
+
+    test "late gun_down for an old conn_pid does not wipe a reconnected channel" do
+      {:ok, pid} = Client.start_link(target: "localhost:17233")
+
+      old_gun = spawn(fn -> Process.sleep(:infinity) end)
+      new_gun = spawn(fn -> Process.sleep(:infinity) end)
+
+      put_channel!(pid, new_gun)
+      assert channel_conn_pid(:sys.get_state(pid).channel) == new_gun
+
+      # Simulate a delayed down from a predecessor connection.
+      send(pid, {:gun_down, old_gun, :http2, :closed, []})
+      # Allow handle_info to run.
+      _ = :sys.get_state(pid)
+
+      assert channel_conn_pid(:sys.get_state(pid).channel) == new_gun
+
+      # A down for the current pid still clears.
+      send(pid, {:gun_down, new_gun, :http2, :closed, []})
+      _ = :sys.get_state(pid)
+      assert :sys.get_state(pid).channel == nil
+
+      for g <- [old_gun, new_gun], Process.alive?(g), do: Process.exit(g, :kill)
       GenServer.stop(pid)
     end
 
@@ -254,4 +270,7 @@ defmodule TemporalEx.ClientTest do
       codec: GRPC.Codec.Proto
     }
   end
+
+  defp channel_conn_pid(%{adapter_payload: %{conn_pid: pid}}), do: pid
+  defp channel_conn_pid(_), do: nil
 end
