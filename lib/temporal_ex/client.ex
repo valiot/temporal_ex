@@ -5,6 +5,18 @@ defmodule TemporalEx.Client do
 
   Adding new RPCs never requires changes to this module — callers simply
   pass the stub function name and a pre-built protobuf request to `rpc/4`.
+
+  ## Concurrency & resilience
+
+  Network I/O runs in the **caller** process, not inside the GenServer.
+  The GenServer only checks out / invalidates the shared gun channel so:
+
+    * concurrent RPCs multiplex over one HTTP/2 connection (gun streams)
+    * cheap metadata reads (`namespace/1`, `data_converter/1`) never queue
+      behind a long `StartWorkflowExecution`
+    * when gun dies mid-RPC (`:down: :normal` / `:noproc`), the channel is
+      dropped and the **same** `rpc/4` call reconnects and retries once —
+      callers typically never see a one-shot transport blip
   """
 
   use GenServer
@@ -14,6 +26,9 @@ defmodule TemporalEx.Client do
   @default_server "localhost:7233"
   @default_call_timeout 5_000
   @default_namespace "default"
+  # Checkout only holds the GenServer for connect/bookkeeping; keep this
+  # bounded so a hung connect can't pin the mailbox forever.
+  @checkout_timeout 10_000
 
   @workflow_service_stub Temporal.Api.Workflowservice.V1.WorkflowService.Stub
 
@@ -46,6 +61,9 @@ defmodule TemporalEx.Client do
   @doc """
   Sends an RPC to the Temporal WorkflowService.
 
+  I/O runs in the calling process. On a transport-level channel death the
+  client invalidates the channel, reconnects, and retries the RPC **once**.
+
   `rpc_name` must be an atom matching a function on the WorkflowService stub
   (e.g., `:start_workflow_execution`).
 
@@ -60,7 +78,7 @@ defmodule TemporalEx.Client do
           {:ok, struct()} | {:error, term()}
   def rpc(client, rpc_name, request, opts \\ []) do
     timeout = Keyword.get(opts, :timeout, @default_call_timeout)
-    GenServer.call(client, {:rpc, rpc_name, request, opts}, timeout)
+    do_rpc(client, rpc_name, request, opts, timeout, _retried? = false)
   end
 
   @doc "Returns the client's configured namespace."
@@ -74,6 +92,39 @@ defmodule TemporalEx.Client do
   def data_converter(client) do
     GenServer.call(client, :get_data_converter)
   end
+
+  # ── RPC (caller process) ────────────────────────────────────────────
+
+  defp do_rpc(client, rpc_name, request, opts, timeout, retried?) do
+    case GenServer.call(client, {:checkout, opts}, @checkout_timeout) do
+      {:ok, channel, call_opts} ->
+        result = invoke_rpc(rpc_name, channel, request, put_timeout(call_opts, timeout))
+
+        case transport_dead_error?(result) do
+          true ->
+            # Drop this channel (no-op if another caller already replaced it),
+            # then retry the whole checkout+invoke once.
+            _ = GenServer.call(client, {:invalidate, channel}, @checkout_timeout)
+
+            case retried? do
+              true -> result
+              false -> do_rpc(client, rpc_name, request, opts, timeout, true)
+            end
+
+          false ->
+            result
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp put_timeout(call_opts, timeout) when is_integer(timeout) and timeout > 0 do
+    Keyword.put(call_opts, :timeout, timeout)
+  end
+
+  defp put_timeout(call_opts, _timeout), do: call_opts
 
   # ── GenServer Callbacks ─────────────────────────────────────────────
 
@@ -100,12 +151,17 @@ defmodule TemporalEx.Client do
 
     {connect_opts, temp_pem_files} = Connection.grpc_connect_opts(server, grpc_config)
 
+    # Optional test seam: `(server, connect_opts) -> {:ok, channel} | {:error, reason}`.
+    # Production always uses GRPC.Stub.connect/2.
+    connect_fun = Keyword.get(opts, :connect_fun, &GRPC.Stub.connect/2)
+
     {:ok,
      %{
        channel: nil,
        server: server,
        namespace: namespace,
        connect_opts: connect_opts,
+       connect_fun: connect_fun,
        authorization: Connection.authorization_from_api_key(api_key),
        identity: identity,
        data_converter: data_converter,
@@ -115,32 +171,34 @@ defmodule TemporalEx.Client do
   end
 
   @impl true
-  def handle_call({:rpc, rpc_name, request, opts}, _from, state) do
+  def handle_call({:checkout, opts}, _from, state) do
     namespace = Keyword.get(opts, :namespace, state.namespace)
 
     case ensure_channel(state) do
       {:ok, connected_state} ->
         metadata = Connection.request_metadata(namespace, connected_state.authorization)
         call_opts = if map_size(metadata) > 0, do: [metadata: metadata], else: []
-
-        result = invoke_rpc(rpc_name, connected_state.channel, request, call_opts)
-        # When gun dies mid-RPC (`:down: :normal` / `:down: :noproc`), the
-        # in-flight call returns an error *before* `{:gun_down, …}` is
-        # handled. If we keep the dead channel, every subsequent RPC reuses
-        # it and fails forever. Drop it so the next call re-connects.
-        {:reply, result, maybe_drop_dead_channel(connected_state, result)}
+        {:reply, {:ok, connected_state.channel, call_opts}, connected_state}
 
       {:error, reason, disconnected_state} ->
         {:reply, {:error, reason}, disconnected_state}
     end
   end
 
-  @impl true
+  def handle_call({:invalidate, channel}, _from, state) do
+    new_state =
+      case same_channel?(state.channel, channel) do
+        true -> %{state | channel: nil}
+        false -> state
+      end
+
+    {:reply, :ok, new_state}
+  end
+
   def handle_call(:get_namespace, _from, state) do
     {:reply, state.namespace, state}
   end
 
-  @impl true
   def handle_call(:get_data_converter, _from, state) do
     {:reply, state.data_converter, state}
   end
@@ -167,8 +225,10 @@ defmodule TemporalEx.Client do
     {:ok, state}
   end
 
-  defp ensure_channel(%{server: server, connect_opts: connect_opts} = state) do
-    case GRPC.Stub.connect(server, connect_opts) do
+  defp ensure_channel(
+         %{server: server, connect_opts: connect_opts, connect_fun: connect_fun} = state
+       ) do
+    case connect_fun.(server, connect_opts) do
       {:ok, channel} ->
         {:ok, %{state | channel: channel}}
 
@@ -192,25 +252,27 @@ defmodule TemporalEx.Client do
 
   # Gun adapter maps `{:error, {:down, reason}}` / connection_error to
   # `%GRPC.RPCError{status: unknown, message: ":down: :normal"}` (etc.).
-  # Those mean the channel process is gone — keep only errors that prove
-  # the transport itself died, not Temporal business failures (NOT_FOUND,
-  # ALREADY_EXISTS, …) which leave a live channel.
-  defp maybe_drop_dead_channel(state, {:error, %GRPC.RPCError{message: message}})
+  defp transport_dead_error?({:error, %GRPC.RPCError{message: message}})
        when is_binary(message) do
-    if transport_dead_message?(message) do
-      %{state | channel: nil}
-    else
-      state
-    end
+    transport_dead_message?(message)
   end
 
-  defp maybe_drop_dead_channel(state, _result), do: state
+  defp transport_dead_error?(_), do: false
 
   defp transport_dead_message?(message) do
     String.starts_with?(message, ":down:") or
       String.starts_with?(message, ":connection_error:") or
       String.contains?(message, "connection_error")
   end
+
+  defp same_channel?(
+         %{adapter_payload: %{conn_pid: a}},
+         %{adapter_payload: %{conn_pid: b}}
+       )
+       when is_pid(a) and is_pid(b),
+       do: a == b
+
+  defp same_channel?(_, _), do: false
 
   defp normalize_map(map) when is_map(map), do: map
   defp normalize_map(list) when is_list(list), do: Map.new(list)

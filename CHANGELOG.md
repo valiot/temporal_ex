@@ -2,7 +2,8 @@
 
 ## 0.2.2 [2026-07-28]
 
-- [Fix] `TemporalEx.Client` drops a dead gRPC channel after mid-RPC gun death (`:down: :normal` / `:down: :noproc` / connection errors) so the next call re-runs `GRPC.Stub.connect`. Previously only a clean `{:gun_down, …}` cleared the channel; when the gun process died during an in-flight RPC the client kept the corpse and every subsequent call failed the same way until the GenServer was restarted.
+- [Fix] `TemporalEx.Client` no longer sticks on a dead gRPC channel after mid-RPC gun death (`:down: :normal` / `:down: :noproc` / connection errors): the channel is dropped and the **same** `rpc/4` reconnects and retries once, so a single transport blip is usually invisible to callers.
+- [Improvement] RPC network I/O runs in the caller process, not inside the GenServer. Concurrent RPCs multiplex over one HTTP/2 connection; cheap `namespace/1` / `data_converter/1` reads no longer queue behind a long Temporal call.
 
 ## 0.2.1 [2026-05-21]
 
