@@ -213,6 +213,44 @@ defmodule TemporalEx.ClientTest do
       _ = Task.await(rpc_task, 5_000)
       GenServer.stop(pid)
     end
+
+    test "namespace/data_converter reads stay lock-free while the GenServer blocks in connect" do
+      # The prolamsa-prod `get_namespace` timeout storm: a concurrent caller
+      # sits inside `handle_call({:checkout})` running a slow connect, pinning
+      # the mailbox. Metadata reads are served from persistent_term, so they
+      # must not queue behind that connect — before this they timed out at 5s.
+      test_pid = self()
+
+      slow_connect = fn _server, _opts ->
+        send(test_pid, :connecting)
+        Process.sleep(1_000)
+        {:error, :simulated_unreachable}
+      end
+
+      {:ok, pid} =
+        Client.start_link(
+          target: "localhost:17233",
+          namespace: "blocked-ns",
+          connect_fun: slow_connect
+        )
+
+      request = %Temporal.Api.Workflowservice.V1.GetSystemInfoRequest{}
+
+      # Kick a checkout from another process so the GenServer is stuck in connect.
+      _ = spawn(fn -> Client.rpc(pid, :get_system_info, request, timeout: 3_000) end)
+      assert_receive :connecting, 1_000
+
+      {ns_us, namespace} = :timer.tc(fn -> Client.namespace(pid) end)
+      {dc_us, converter} = :timer.tc(fn -> Client.data_converter(pid) end)
+
+      assert namespace == "blocked-ns"
+      assert converter == TemporalEx.DataConverter.Json
+      # Must not wait on the 1s connect hold — persistent_term, not GenServer.call.
+      assert ns_us < 100_000
+      assert dc_us < 100_000
+
+      GenServer.stop(pid)
+    end
   end
 
   # ── Channel-death fixtures ──────────────────────────────────────────

@@ -12,8 +12,10 @@ defmodule TemporalEx.Client do
   The GenServer only checks out / invalidates the shared gun channel so:
 
     * concurrent RPCs multiplex over one HTTP/2 connection (gun streams)
-    * cheap metadata reads (`namespace/1`, `data_converter/1`) never queue
-      behind a long `StartWorkflowExecution`
+    * cheap metadata reads (`namespace/1`, `data_converter/1`) are served
+      from `:persistent_term` and never touch the GenServer mailbox, so they
+      can't queue behind a long `StartWorkflowExecution` *or* a blocking
+      (re)connect
     * when gun dies mid-RPC (`:down: :normal` / `:noproc`), the channel is
       dropped and the **same** `rpc/4` call reconnects and retries once —
       callers typically never see a one-shot transport blip
@@ -84,13 +86,19 @@ defmodule TemporalEx.Client do
   @doc "Returns the client's configured namespace."
   @spec namespace(GenServer.server()) :: String.t()
   def namespace(client) do
-    GenServer.call(client, :get_namespace)
+    case fetch_meta(client) do
+      {:ok, %{namespace: namespace}} -> namespace
+      :error -> GenServer.call(client, :get_namespace)
+    end
   end
 
   @doc "Returns the client's configured data converter module."
   @spec data_converter(GenServer.server()) :: module()
   def data_converter(client) do
-    GenServer.call(client, :get_data_converter)
+    case fetch_meta(client) do
+      {:ok, %{data_converter: data_converter}} -> data_converter
+      :error -> GenServer.call(client, :get_data_converter)
+    end
   end
 
   # ── RPC (caller process) ────────────────────────────────────────────
@@ -168,6 +176,18 @@ defmodule TemporalEx.Client do
     # Production always uses GRPC.Stub.connect/2.
     connect_fun = Keyword.get(opts, :connect_fun, &GRPC.Stub.connect/2)
 
+    # Cache the immutable metadata so `namespace/1` / `data_converter/1` read
+    # it lock-free instead of round-tripping the (possibly connect-blocked)
+    # GenServer. Keyed by registered name, or pid when anonymous.
+    meta_ref = meta_ref(Keyword.get(opts, :name))
+
+    if meta_ref,
+      do:
+        :persistent_term.put(meta_key(meta_ref), %{
+          namespace: namespace,
+          data_converter: data_converter
+        })
+
     {:ok,
      %{
        channel: nil,
@@ -179,7 +199,8 @@ defmodule TemporalEx.Client do
        identity: identity,
        data_converter: data_converter,
        call_timeout: call_timeout,
-       temp_pem_files: temp_pem_files
+       temp_pem_files: temp_pem_files,
+       meta_ref: meta_ref
      }}
   end
 
@@ -240,11 +261,36 @@ defmodule TemporalEx.Client do
 
   @impl true
   def terminate(_reason, state) do
+    case Map.get(state, :meta_ref) do
+      nil -> :ok
+      ref -> :persistent_term.erase(meta_key(ref))
+    end
+
     Connection.cleanup_temp_pem_files(Map.get(state, :temp_pem_files, []))
     :ok
   end
 
   # ── Private ─────────────────────────────────────────────────────────
+
+  # Immutable metadata (namespace, data_converter) lives in :persistent_term
+  # so reads are lock-free and can't queue behind a blocking connect. Named
+  # clients key by name (a watchdog restart overwrites the same key, no leak);
+  # anonymous clients key by pid. via/global refs skip the cache and fall back
+  # to the GenServer.
+  defp meta_key(ref), do: {__MODULE__, :meta, ref}
+
+  defp meta_ref(nil), do: self()
+  defp meta_ref(name) when is_atom(name), do: name
+  defp meta_ref(_other), do: nil
+
+  defp fetch_meta(client) when is_atom(client) or is_pid(client) do
+    case :persistent_term.get(meta_key(client), :undefined) do
+      :undefined -> :error
+      meta -> {:ok, meta}
+    end
+  end
+
+  defp fetch_meta(_client), do: :error
 
   defp ensure_channel(%{channel: channel} = state) when not is_nil(channel) do
     {:ok, state}

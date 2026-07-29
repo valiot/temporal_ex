@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## 0.2.3 [2026-07-29]
+
+- [Improvement] `namespace/1` and `data_converter/1` are served from `:persistent_term` instead of a `GenServer.call`. These immutable reads are now lock-free and no longer share the client mailbox, so a concurrent caller blocked mid-`connect` can't make them time out. Removes the `{:timeout, {GenServer, :call, [_, :get_namespace, 5000]}}` bursts seen on every facade op (describe/start/signal) during a Temporal blip.
+
 ## 0.2.2 [2026-07-28]
 
 - [Fix] `TemporalEx.Client` no longer sticks on a dead gRPC channel after mid-RPC gun death (`:down: :normal` / `:down: :noproc` / connection errors): the channel is dropped and the **same** `rpc/4` reconnects and retries once, so a single transport blip is usually invisible to callers.
