@@ -215,7 +215,7 @@ defmodule TemporalEx.ClientTest do
     end
 
     test "namespace/data_converter reads stay lock-free while the GenServer blocks in connect" do
-      # The prolamsa-prod `get_namespace` timeout storm: a concurrent caller
+      # The production `get_namespace` timeout storm: a concurrent caller
       # sits inside `handle_call({:checkout})` running a slow connect, pinning
       # the mailbox. Metadata reads are served from persistent_term, so they
       # must not queue behind that connect — before this they timed out at 5s.

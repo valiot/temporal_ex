@@ -301,12 +301,16 @@ defmodule TemporalEx.Client do
 
   defp fetch_meta(_client), do: :error
 
-  defp fetch_meta_by_name(pid) do
+  defp fetch_meta_by_name(pid) when node(pid) == node() do
     case Process.info(pid, :registered_name) do
       {:registered_name, name} when is_atom(name) -> get_meta(name)
       _ -> :error
     end
   end
+
+  # Process.info/2 raises on a remote pid, so a remote client falls back to the
+  # GenServer instead of crashing the caller.
+  defp fetch_meta_by_name(_pid), do: :error
 
   defp get_meta(ref) do
     case :persistent_term.get(meta_key(ref), :undefined) do
