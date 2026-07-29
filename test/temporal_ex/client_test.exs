@@ -213,6 +213,83 @@ defmodule TemporalEx.ClientTest do
       _ = Task.await(rpc_task, 5_000)
       GenServer.stop(pid)
     end
+
+    test "namespace/data_converter reads stay lock-free while the GenServer blocks in connect" do
+      # The production `get_namespace` timeout storm: a concurrent caller
+      # sits inside `handle_call({:checkout})` running a slow connect, pinning
+      # the mailbox. Metadata reads are served from persistent_term, so they
+      # must not queue behind that connect — before this they timed out at 5s.
+      test_pid = self()
+
+      slow_connect = fn _server, _opts ->
+        send(test_pid, :connecting)
+        Process.sleep(1_000)
+        {:error, :simulated_unreachable}
+      end
+
+      {:ok, pid} =
+        Client.start_link(
+          target: "localhost:17233",
+          namespace: "blocked-ns",
+          connect_fun: slow_connect
+        )
+
+      request = %Temporal.Api.Workflowservice.V1.GetSystemInfoRequest{}
+
+      # Kick a checkout from another process so the GenServer is stuck in connect.
+      _ = spawn(fn -> Client.rpc(pid, :get_system_info, request, timeout: 3_000) end)
+      assert_receive :connecting, 1_000
+
+      {ns_us, namespace} = :timer.tc(fn -> Client.namespace(pid) end)
+      {dc_us, converter} = :timer.tc(fn -> Client.data_converter(pid) end)
+
+      assert namespace == "blocked-ns"
+      assert converter == TemporalEx.DataConverter.Json
+      # Must not wait on the 1s connect hold — persistent_term, not GenServer.call.
+      assert ns_us < 100_000
+      assert dc_us < 100_000
+
+      GenServer.stop(pid)
+    end
+
+    test "reads via pid stay lock-free for a name-registered client blocked in connect" do
+      # start_link returns a pid even when a name is registered, and the docs are
+      # pid-first — so a caller may hold the pid of a named client. That pid must
+      # still resolve to the name-keyed cache (via Process.info), not fall back to
+      # the GenServer, or it would time out behind a blocking connect.
+      test_pid = self()
+
+      slow_connect = fn _server, _opts ->
+        send(test_pid, :connecting)
+        Process.sleep(1_000)
+        {:error, :simulated_unreachable}
+      end
+
+      {:ok, pid} =
+        Client.start_link(
+          name: :meta_named_blocked_client,
+          target: "localhost:17233",
+          namespace: "named-ns",
+          connect_fun: slow_connect
+        )
+
+      request = %Temporal.Api.Workflowservice.V1.GetSystemInfoRequest{}
+
+      # Block the GenServer in connect via the registered name.
+      _ =
+        spawn(fn ->
+          Client.rpc(:meta_named_blocked_client, :get_system_info, request, timeout: 3_000)
+        end)
+
+      assert_receive :connecting, 1_000
+
+      # Read by the PID (not the name) while the mailbox is pinned.
+      {ns_us, namespace} = :timer.tc(fn -> Client.namespace(pid) end)
+      assert namespace == "named-ns"
+      assert ns_us < 100_000
+
+      GenServer.stop(pid)
+    end
   end
 
   # ── Channel-death fixtures ──────────────────────────────────────────
