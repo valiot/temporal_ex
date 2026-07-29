@@ -283,14 +283,37 @@ defmodule TemporalEx.Client do
   defp meta_ref(name) when is_atom(name), do: name
   defp meta_ref(_other), do: nil
 
-  defp fetch_meta(client) when is_atom(client) or is_pid(client) do
-    case :persistent_term.get(meta_key(client), :undefined) do
-      :undefined -> :error
-      meta -> {:ok, meta}
+  # Named clients cache under the name only: a watchdog :shutdown restart
+  # re-registers the same name and overwrites the key, whereas a pid key would
+  # leak (a non-trapping GenServer skips terminate/2 on :shutdown). So a caller
+  # holding the pid of a name-registered client resolves pid -> name first;
+  # anonymous clients hit their pid key directly. `Process.info/2` reads the PCB
+  # without messaging the process, so it stays lock-free even while the mailbox
+  # is pinned mid-connect.
+  defp fetch_meta(client) when is_atom(client), do: get_meta(client)
+
+  defp fetch_meta(client) when is_pid(client) do
+    case get_meta(client) do
+      {:ok, _} = found -> found
+      :error -> fetch_meta_by_name(client)
     end
   end
 
   defp fetch_meta(_client), do: :error
+
+  defp fetch_meta_by_name(pid) do
+    case Process.info(pid, :registered_name) do
+      {:registered_name, name} when is_atom(name) -> get_meta(name)
+      _ -> :error
+    end
+  end
+
+  defp get_meta(ref) do
+    case :persistent_term.get(meta_key(ref), :undefined) do
+      :undefined -> :error
+      meta -> {:ok, meta}
+    end
+  end
 
   defp ensure_channel(%{channel: channel} = state) when not is_nil(channel) do
     {:ok, state}
