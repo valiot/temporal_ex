@@ -292,6 +292,47 @@ defmodule TemporalEx.ClientTest do
     end
   end
 
+  describe "transport_dead_error?/1" do
+    # The transient transport failures do_rpc/6 reconnects + retries once (see
+    # the retry-path tests above). Everything else is a real error the caller
+    # must handle — never silently retried.
+    test "classifies gun death and connection errors as transport-dead" do
+      assert Client.transport_dead_error?({:error, %GRPC.RPCError{message: ":down: :normal"}})
+      assert Client.transport_dead_error?({:error, %GRPC.RPCError{message: ":down: :noproc"}})
+
+      assert Client.transport_dead_error?(
+               {:error, %GRPC.RPCError{message: ":connection_error: :closed"}}
+             )
+    end
+
+    # A live connection the peer is draining (HTTP/2 GOAWAY from a periodic
+    # keepAliveMaxConnectionAge recycle) races an in-flight RPC as
+    # `:stream_error: :closing` / a server-sent reset. GOAWAY guarantees the
+    # stream was not processed, so these must retry rather than surface to the
+    # caller as `code: 13`.
+    test "classifies a GOAWAY / stream-close race as transport-dead" do
+      assert Client.transport_dead_error?(
+               {:error, %GRPC.RPCError{message: ":stream_error: :closing"}}
+             )
+
+      assert Client.transport_dead_error?(
+               {:error,
+                %GRPC.RPCError{
+                  message: ~s(:stream_error: {:stream_error, :cancel, "Stream reset by server."})
+                }}
+             )
+    end
+
+    test "leaves a real server-side error for the caller (not retried)" do
+      refute Client.transport_dead_error?(
+               {:error, %GRPC.RPCError{status: 5, message: "workflow not found"}}
+             )
+
+      refute Client.transport_dead_error?({:ok, :whatever})
+      refute Client.transport_dead_error?({:error, "some non-RPC string"})
+    end
+  end
+
   # ── Channel-death fixtures ──────────────────────────────────────────
   #
   # Real gun/gRPC path: `:gun.post` casts a request to `conn_pid`, then

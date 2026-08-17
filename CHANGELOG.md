@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## 0.2.4 [2026-08-17]
+
+- [Fix] `TemporalEx.Client` now reconnects and retries once when an RPC races a connection the peer is draining, surfaced by gun as `%GRPC.RPCError{message: ":stream_error: :closing"}` (or a server-sent stream reset). This is the HTTP/2 GOAWAY a periodic `keepAliveMaxConnectionAge` recycle on the Temporal frontend (or an ingress in front of it) sends; GOAWAY guarantees the refused stream was not processed, so retrying it on a fresh connection is safe and can't double-execute. Extends the existing `:down:` / `connection_error` retry-once path — previously a recycle leaked to callers as `code: 13, ":stream_error: :closing"`, scattered across every long-lived Temporal caller (describe, dispatch, schedule reconcile).
+
 ## 0.2.3 [2026-07-29]
 
 - [Improvement] `namespace/1` and `data_converter/1` are served from `:persistent_term` instead of a `GenServer.call`. These immutable reads are now lock-free and no longer share the client mailbox, so a concurrent caller blocked mid-`connect` can't make them time out. Removes the `{:timeout, {GenServer, :call, [_, :get_namespace, 5000]}}` bursts seen on every facade op (describe/start/signal) during a Temporal blip.

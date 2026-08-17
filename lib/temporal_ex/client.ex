@@ -16,8 +16,10 @@ defmodule TemporalEx.Client do
       from `:persistent_term` and never touch the GenServer mailbox, so they
       can't queue behind a long `StartWorkflowExecution` *or* a blocking
       (re)connect
-    * when gun dies mid-RPC (`:down: :normal` / `:noproc`), the channel is
-      dropped and the **same** `rpc/4` call reconnects and retries once —
+    * when gun dies mid-RPC (`:down: :normal` / `:noproc`), or the server
+      drains a live connection mid-RPC (`:stream_error: :closing` — the HTTP/2
+      GOAWAY a periodic `keepAliveMaxConnectionAge` recycle sends), the channel
+      is dropped and the **same** `rpc/4` call reconnects and retries once —
       callers typically never see a one-shot transport blip
   """
 
@@ -348,19 +350,33 @@ defmodule TemporalEx.Client do
     end
   end
 
-  # Gun adapter maps `{:error, {:down, reason}}` / connection_error to
-  # `%GRPC.RPCError{status: unknown, message: ":down: :normal"}` (etc.).
-  defp transport_dead_error?({:error, %GRPC.RPCError{message: message}})
-       when is_binary(message) do
+  # Whether an RPC result is a transport-layer failure the client should retry
+  # once on a fresh channel (see `do_rpc/6`), as opposed to a real server-side
+  # error the caller must handle. Gun maps these to `%GRPC.RPCError{}` with a
+  # message tagging the transport reason:
+  #
+  #   * `:down: …` / `connection_error` — gun died / couldn't reach the server.
+  #   * `:stream_error: :closing` — the RPC raced a connection the peer is
+  #     draining (an HTTP/2 GOAWAY, e.g. Temporal frontend / ingress recycling
+  #     on `keepAliveMaxConnectionAge`). GOAWAY guarantees the server did NOT
+  #     process a stream refused this way, so retrying it on a new connection
+  #     is safe and can't double-execute. Without this, a periodic recycle
+  #     surfaces to callers as `code: 13, ":stream_error: :closing"`.
+  #
+  # `@doc false`: exposed only so the classification is unit-testable.
+  @doc false
+  def transport_dead_error?({:error, %GRPC.RPCError{message: message}})
+      when is_binary(message) do
     transport_dead_message?(message)
   end
 
-  defp transport_dead_error?(_), do: false
+  def transport_dead_error?(_), do: false
 
   defp transport_dead_message?(message) do
     String.starts_with?(message, ":down:") or
       String.starts_with?(message, ":connection_error:") or
-      String.contains?(message, "connection_error")
+      String.contains?(message, "connection_error") or
+      String.starts_with?(message, ":stream_error:")
   end
 
   defp same_channel?(left, right) do
