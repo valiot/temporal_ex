@@ -315,7 +315,11 @@ defmodule TemporalEx.ClientTest do
              )
 
       assert Client.transport_dead_error?(
-               {:error, %GRPC.RPCError{message: ~s(:stream_error: {:goaway, 0, :no_error, ""})}}
+               {:error,
+                %GRPC.RPCError{
+                  message:
+                    ~s(:stream_error: {:goaway, :no_error, "The connection is going away."})
+                }}
              )
     end
 
