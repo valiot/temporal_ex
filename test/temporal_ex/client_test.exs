@@ -292,6 +292,63 @@ defmodule TemporalEx.ClientTest do
     end
   end
 
+  describe "transport_dead_error?/1" do
+    # The transient transport failures do_rpc/6 reconnects + retries once (see
+    # the retry-path tests above). Everything else is a real error the caller
+    # must handle — never silently retried.
+    test "classifies gun death and connection errors as transport-dead" do
+      assert Client.transport_dead_error?({:error, %GRPC.RPCError{message: ":down: :normal"}})
+      assert Client.transport_dead_error?({:error, %GRPC.RPCError{message: ":down: :noproc"}})
+
+      assert Client.transport_dead_error?(
+               {:error, %GRPC.RPCError{message: ":connection_error: :closed"}}
+             )
+    end
+
+    # A stream the peer refused before processing it: gun's `closing` state (the
+    # HTTP/2 GOAWAY a keepAliveMaxConnectionAge recycle drives it into) or a
+    # `{:goaway, …}` above last_stream_id. Guaranteed not processed, so these
+    # retry rather than surface to the caller as `code: 13`.
+    test "retries a refused / GOAWAY stream (guaranteed not processed)" do
+      assert Client.transport_dead_error?(
+               {:error, %GRPC.RPCError{message: ":stream_error: :closing"}}
+             )
+
+      assert Client.transport_dead_error?(
+               {:error,
+                %GRPC.RPCError{
+                  message:
+                    ~s(:stream_error: {:goaway, :no_error, "The connection is going away."})
+                }}
+             )
+    end
+
+    # A server-sent RST (`:cancel`) or a mid-flight `:closed` may have been
+    # processed before the reset — NOT retried, so a non-idempotent RPC (signal
+    # / update) can't double-apply; the caller sees `code: 13` and decides.
+    test "does not retry a server RST or mid-flight close (server outcome unknown)" do
+      refute Client.transport_dead_error?(
+               {:error,
+                %GRPC.RPCError{
+                  message: ~s(:stream_error: {:stream_error, :cancel, "Stream reset by server."})
+                }}
+             )
+
+      refute Client.transport_dead_error?(
+               {:error, %GRPC.RPCError{message: ":stream_error: :closed"}}
+             )
+    end
+
+    test "leaves a real server-side error for the caller (not retried)" do
+      refute Client.transport_dead_error?(
+               {:error, %GRPC.RPCError{status: 5, message: "workflow not found"}}
+             )
+
+      refute Client.transport_dead_error?({:ok, :whatever})
+      refute Client.transport_dead_error?({:error, "some non-RPC string"})
+    end
+  end
+
   # ── Channel-death fixtures ──────────────────────────────────────────
   #
   # Real gun/gRPC path: `:gun.post` casts a request to `conn_pid`, then

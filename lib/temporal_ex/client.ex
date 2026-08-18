@@ -16,8 +16,10 @@ defmodule TemporalEx.Client do
       from `:persistent_term` and never touch the GenServer mailbox, so they
       can't queue behind a long `StartWorkflowExecution` *or* a blocking
       (re)connect
-    * when gun dies mid-RPC (`:down: :normal` / `:noproc`), the channel is
-      dropped and the **same** `rpc/4` call reconnects and retries once —
+    * when gun dies mid-RPC (`:down: :normal` / `:noproc`), or the server
+      drains a live connection mid-RPC (`:stream_error: :closing` — the HTTP/2
+      GOAWAY a periodic `keepAliveMaxConnectionAge` recycle sends), the channel
+      is dropped and the **same** `rpc/4` call reconnects and retries once —
       callers typically never see a one-shot transport blip
   """
 
@@ -348,19 +350,50 @@ defmodule TemporalEx.Client do
     end
   end
 
-  # Gun adapter maps `{:error, {:down, reason}}` / connection_error to
-  # `%GRPC.RPCError{status: unknown, message: ":down: :normal"}` (etc.).
-  defp transport_dead_error?({:error, %GRPC.RPCError{message: message}})
-       when is_binary(message) do
+  # Whether an RPC result is a transport-layer failure the client should retry
+  # once on a fresh channel (see `do_rpc/6`), as opposed to a real server-side
+  # error the caller must handle. Gun maps these to `%GRPC.RPCError{}` with a
+  # message tagging the transport reason:
+  #
+  #   * `:down: …` / `connection_error` — gun died / couldn't reach the server.
+  #   * a *refused* stream — see `refused_stream?/1`.
+  #
+  # `@doc false`: exposed only so the classification is unit-testable.
+  @doc false
+  def transport_dead_error?({:error, %GRPC.RPCError{message: message}})
+      when is_binary(message) do
     transport_dead_message?(message)
   end
 
-  defp transport_dead_error?(_), do: false
+  def transport_dead_error?(_), do: false
 
   defp transport_dead_message?(message) do
     String.starts_with?(message, ":down:") or
       String.starts_with?(message, ":connection_error:") or
-      String.contains?(message, "connection_error")
+      String.contains?(message, "connection_error") or
+      refused_stream?(message)
+  end
+
+  # A `:stream_error:` where gun refused the request *before the server could
+  # act on it*, so retrying it on a fresh connection is guaranteed not to
+  # double-execute:
+  #
+  #   * `:closing` — gun rejects the cast in its `closing` state (reachable
+  #     because the client sets gun `retry: 0` via `connect_retry`), the state
+  #     an HTTP/2 GOAWAY drives it into. This is the production case: a periodic
+  #     `keepAliveMaxConnectionAge` recycle on the Temporal frontend (or an
+  #     ingress in front of it) that otherwise leaks as `code: 13`.
+  #   * `{:goaway, …}` — a stream id above the GOAWAY `last_stream_id`, which
+  #     RFC 7540 guarantees the server did not process.
+  #
+  # Deliberately NOT matched: a server-sent RST (`{:stream_error, :cancel, …}`,
+  # "Stream reset by server") or a mid-flight `:closed`. The server may have
+  # processed the request before the reset, so an automatic retry of a
+  # non-idempotent RPC (signal / update) could double-apply — those keep
+  # surfacing as `code: 13` for the caller to decide.
+  defp refused_stream?(message) do
+    String.starts_with?(message, ":stream_error:") and
+      (String.contains?(message, ":closing") or String.contains?(message, "{:goaway,"))
   end
 
   defp same_channel?(left, right) do

@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## 0.2.4 [2026-08-17]
+
+- [Fix] `TemporalEx.Client` now reconnects and retries once when an RPC is refused by a connection the peer is draining — gun's `:stream_error: :closing` (the HTTP/2 GOAWAY a `keepAliveMaxConnectionAge` recycle sends) or a `{:goaway, …}` above `last_stream_id`. Both guarantee the server never processed the stream, so the retry can't double-execute; previously the recycle leaked to callers as `code: 13`. A server-sent RST (`:cancel`) or mid-flight `:closed` is left to surface, since the server may have processed the request first.
+
 ## 0.2.3 [2026-07-29]
 
 - [Improvement] `namespace/1` and `data_converter/1` are served from `:persistent_term` instead of a `GenServer.call`. These immutable reads are now lock-free and no longer share the client mailbox, so a concurrent caller blocked mid-`connect` can't make them time out. Removes the `{:timeout, {GenServer, :call, [_, :get_namespace, 5000]}}` bursts seen on every facade op (describe/start/signal) during a Temporal blip.
