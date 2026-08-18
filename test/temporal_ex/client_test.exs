@@ -305,21 +305,33 @@ defmodule TemporalEx.ClientTest do
              )
     end
 
-    # A live connection the peer is draining (HTTP/2 GOAWAY from a periodic
-    # keepAliveMaxConnectionAge recycle) races an in-flight RPC as
-    # `:stream_error: :closing` / a server-sent reset. GOAWAY guarantees the
-    # stream was not processed, so these must retry rather than surface to the
-    # caller as `code: 13`.
-    test "classifies a GOAWAY / stream-close race as transport-dead" do
+    # A stream the peer refused before processing it: gun's `closing` state (the
+    # HTTP/2 GOAWAY a keepAliveMaxConnectionAge recycle drives it into) or a
+    # `{:goaway, …}` above last_stream_id. Guaranteed not processed, so these
+    # retry rather than surface to the caller as `code: 13`.
+    test "retries a refused / GOAWAY stream (guaranteed not processed)" do
       assert Client.transport_dead_error?(
                {:error, %GRPC.RPCError{message: ":stream_error: :closing"}}
              )
 
       assert Client.transport_dead_error?(
+               {:error, %GRPC.RPCError{message: ~s(:stream_error: {:goaway, 0, :no_error, ""})}}
+             )
+    end
+
+    # A server-sent RST (`:cancel`) or a mid-flight `:closed` may have been
+    # processed before the reset — NOT retried, so a non-idempotent RPC (signal
+    # / update) can't double-apply; the caller sees `code: 13` and decides.
+    test "does not retry a server RST or mid-flight close (server outcome unknown)" do
+      refute Client.transport_dead_error?(
                {:error,
                 %GRPC.RPCError{
                   message: ~s(:stream_error: {:stream_error, :cancel, "Stream reset by server."})
                 }}
+             )
+
+      refute Client.transport_dead_error?(
+               {:error, %GRPC.RPCError{message: ":stream_error: :closed"}}
              )
     end
 

@@ -356,12 +356,7 @@ defmodule TemporalEx.Client do
   # message tagging the transport reason:
   #
   #   * `:down: …` / `connection_error` — gun died / couldn't reach the server.
-  #   * `:stream_error: :closing` — the RPC raced a connection the peer is
-  #     draining (an HTTP/2 GOAWAY, e.g. Temporal frontend / ingress recycling
-  #     on `keepAliveMaxConnectionAge`). GOAWAY guarantees the server did NOT
-  #     process a stream refused this way, so retrying it on a new connection
-  #     is safe and can't double-execute. Without this, a periodic recycle
-  #     surfaces to callers as `code: 13, ":stream_error: :closing"`.
+  #   * a *refused* stream — see `refused_stream?/1`.
   #
   # `@doc false`: exposed only so the classification is unit-testable.
   @doc false
@@ -376,7 +371,29 @@ defmodule TemporalEx.Client do
     String.starts_with?(message, ":down:") or
       String.starts_with?(message, ":connection_error:") or
       String.contains?(message, "connection_error") or
-      String.starts_with?(message, ":stream_error:")
+      refused_stream?(message)
+  end
+
+  # A `:stream_error:` where gun refused the request *before the server could
+  # act on it*, so retrying it on a fresh connection is guaranteed not to
+  # double-execute:
+  #
+  #   * `:closing` — gun rejects the cast in its `closing` state (reachable
+  #     because the client sets gun `retry: 0` via `connect_retry`), the state
+  #     an HTTP/2 GOAWAY drives it into. This is the production case: a periodic
+  #     `keepAliveMaxConnectionAge` recycle on the Temporal frontend (or an
+  #     ingress in front of it) that otherwise leaks as `code: 13`.
+  #   * `{:goaway, …}` — a stream id above the GOAWAY `last_stream_id`, which
+  #     RFC 7540 guarantees the server did not process.
+  #
+  # Deliberately NOT matched: a server-sent RST (`{:stream_error, :cancel, …}`,
+  # "Stream reset by server") or a mid-flight `:closed`. The server may have
+  # processed the request before the reset, so an automatic retry of a
+  # non-idempotent RPC (signal / update) could double-apply — those keep
+  # surfacing as `code: 13` for the caller to decide.
+  defp refused_stream?(message) do
+    String.starts_with?(message, ":stream_error:") and
+      (String.contains?(message, ":closing") or String.contains?(message, "{:goaway,"))
   end
 
   defp same_channel?(left, right) do
