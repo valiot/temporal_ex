@@ -2,7 +2,7 @@
 
 ## 0.2.4 [2026-08-17]
 
-- [Fix] `TemporalEx.Client` now reconnects and retries once when an RPC is refused by a connection the peer is draining, surfaced by gun as `%GRPC.RPCError{message: ":stream_error: :closing"}` (gun's `closing` state under `retry: 0`) or a `{:goaway, …}` stream error. This is the HTTP/2 GOAWAY a periodic `keepAliveMaxConnectionAge` recycle on the Temporal frontend (or an ingress in front of it) sends; both shapes guarantee the server did not process the stream, so retrying on a fresh connection is safe and can't double-execute. Extends the existing `:down:` / `connection_error` retry-once path — previously a recycle leaked to callers as `code: 13, ":stream_error: :closing"`, scattered across every long-lived Temporal caller (describe, dispatch, schedule reconcile). A server-sent RST (`:cancel`, "Stream reset by server") or a mid-flight `:closed` is intentionally left to surface, since the server may have processed the request before the reset — a blind retry there could double-apply a non-idempotent RPC (signal / update).
+- [Fix] `TemporalEx.Client` now reconnects and retries once when an RPC is refused by a connection the peer is draining — gun's `:stream_error: :closing` (the HTTP/2 GOAWAY a `keepAliveMaxConnectionAge` recycle sends) or a `{:goaway, …}` above `last_stream_id`. Both guarantee the server never processed the stream, so the retry can't double-execute; previously the recycle leaked to callers as `code: 13`. A server-sent RST (`:cancel`) or mid-flight `:closed` is left to surface, since the server may have processed the request first.
 
 ## 0.2.3 [2026-07-29]
 
