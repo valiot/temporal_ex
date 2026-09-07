@@ -206,17 +206,20 @@ defmodule TemporalEx.Client.Connection do
     raise "could not allocate a unique temp PEM path after #{@max_temp_pem_attempts} attempts"
   end
 
-  # `System.unique_integer/1` is process-local — two BEAMs running on
-  # the same host can independently pick the same counter and collide
-  # on the temp filename, raising `:eexist` here. Retry with a fresh
-  # name on collision so the cluster harness (which routinely spawns
-  # multiple BEAMs against the same Temporal cert) doesn't crash.
+  # The name must be unique across BEAM *restarts*, not just within one
+  # BEAM. The old `#{:os.getpid()}-#{System.unique_integer/1}` scheme was
+  # not: a container's BEAM keeps a stable OS pid and `unique_integer`
+  # restarts from a low value on each boot, so a crash that left PEM files
+  # behind (cleanup only runs on graceful shutdown) made the next boot
+  # regenerate the *same* names, collide on `:eexist`, and — with a
+  # persisted `/tmp` (an emptyDir survives container restarts) — crash-loop
+  # forever. `:crypto.strong_rand_bytes/1` makes each name independent of
+  # pid, counter, and restart; the retry stays as defense-in-depth for the
+  # astronomically unlikely random collision.
   defp do_write_temp_pem_file!(prefix, pem, attempts) do
-    path =
-      Path.join(
-        System.tmp_dir!(),
-        "#{prefix}-#{:os.getpid()}-#{System.unique_integer([:positive])}.pem"
-      )
+    suffix = :crypto.strong_rand_bytes(16) |> Base.url_encode64(padding: false)
+
+    path = Path.join(System.tmp_dir!(), "#{prefix}-#{suffix}.pem")
 
     case File.open(path, [:write, :exclusive, :binary]) do
       {:ok, file} ->

@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## 0.2.5 [2026-09-07]
+
+- [Fix] `TemporalEx.Client.Connection` temp PEM files now use a strongly-random name (`:crypto.strong_rand_bytes/1`) instead of `<os_pid>-<System.unique_integer/1>`. The 0.2.1 scheme is deterministic across BEAM *restarts* — a containerized BEAM keeps a stable OS pid and `unique_integer` resets from a low value on each boot — so a boot that wrote PEM files and crashed before cleanup (cleanup only runs on graceful shutdown) left names the next boot regenerated exactly. With a persisted `/tmp` (an emptyDir survives container restarts) every candidate then collides on `:eexist` and the client raises `could not allocate a unique temp PEM path after 8 attempts`, failing `TemporalEx.Client.init` and crash-looping the host application permanently. Random names are independent of pid, counter, and restart, so they never collide with leftover residue; the 8-attempt retry stays as defense-in-depth. Supersedes the 0.2.1 pid-suffix mitigation and covers both the multi-BEAM and the restart cases.
+
 ## 0.2.4 [2026-08-17]
 
 - [Fix] `TemporalEx.Client` now reconnects and retries once when an RPC is refused by a connection the peer is draining — gun's `:stream_error: :closing` (the HTTP/2 GOAWAY a `keepAliveMaxConnectionAge` recycle sends) or a `{:goaway, …}` above `last_stream_id`. Both guarantee the server never processed the stream, so the retry can't double-execute; previously the recycle leaked to callers as `code: 13`. A server-sent RST (`:cancel`) or mid-flight `:closed` is left to surface, since the server may have processed the request first.

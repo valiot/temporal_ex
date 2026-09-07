@@ -104,6 +104,59 @@ defmodule TemporalEx.Client.ConnectionTest do
       refute File.exists?(key_path)
     end
 
+    test "temp names survive leftover files from a prior crashed boot (restart safety)" do
+      cert_b64 = Base.encode64("-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----")
+      key_b64 = Base.encode64("-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----")
+      config = %{client_cert_pem_b64: cert_b64, client_key_pem_b64: key_b64}
+
+      # Simulate residue from a boot that wrote PEMs and crashed before
+      # cleanup, under the OLD `<prefix>-<os_pid>-<counter>` naming. With a
+      # persisted temp dir this is exactly the residue that triggers the loop.
+      leftovers =
+        for prefix <- ["temporal-client-cert", "temporal-client-key"], n <- 1..20 do
+          path = Path.join(System.tmp_dir!(), "#{prefix}-#{:os.getpid()}-#{n}.pem")
+          File.write!(path, "stale")
+          path
+        end
+
+      try do
+        paths =
+          for _ <- 1..25 do
+            {cert_path, key_path, temp_files} = Connection.resolve_client_mtls_files(config)
+
+            try do
+              assert File.exists?(cert_path)
+              assert File.exists?(key_path)
+              [cert_path, key_path]
+            after
+              # Always drop this iteration's files, even if an assertion above
+              # raises, so a failing run can't leave residue in the temp dir.
+              Connection.cleanup_temp_pem_files(temp_files)
+            end
+          end
+          |> List.flatten()
+
+        # No collision with the residue or across calls: every name is fresh.
+        assert length(Enum.uniq(paths)) == length(paths)
+
+        # The suffix is 16 bytes of strong randomness, not the pid+counter
+        # that repeats across restarts. Decoding pins the fix: the old
+        # `<pid>-<n>` suffix is not valid base64url of 16 bytes.
+        for path <- paths do
+          suffix =
+            path
+            |> Path.basename()
+            |> String.replace(~r/^temporal-client-(cert|key)-/, "")
+            |> String.replace_suffix(".pem", "")
+
+          assert {:ok, bytes} = Base.url_decode64(suffix, padding: false)
+          assert byte_size(bytes) == 16
+        end
+      after
+        Enum.each(leftovers, &File.rm/1)
+      end
+    end
+
     test "raises when only cert is provided" do
       cert_b64 = Base.encode64("cert-data")
       config = %{client_cert_pem_b64: cert_b64}
