@@ -246,22 +246,6 @@ defmodule TemporalEx.Client do
   end
 
   @impl true
-  def handle_info({:gun_up, _pid, :http2}, state) do
-    {:noreply, state}
-  end
-
-  # Only clear when the downed pid is the channel we currently hold. A late
-  # gun_down from a dead predecessor must not wipe a successful reconnect
-  # (and leak the new gun by dropping our only reference without disconnect).
-  @impl true
-  def handle_info({:gun_down, pid, :http2, _reason, _killed_streams}, state) do
-    case channel_conn_pid(state.channel) do
-      ^pid -> {:noreply, %{state | channel: nil}}
-      _ -> {:noreply, state}
-    end
-  end
-
-  @impl true
   def terminate(_reason, state) do
     case Map.get(state, :meta_ref) do
       nil -> :ok
@@ -348,6 +332,20 @@ defmodule TemporalEx.Client do
     else
       {:error, "Unknown Temporal RPC: #{rpc_name}"}
     end
+  catch
+    # grpc >= 1.0 sends the request through a per-channel connection GenServer
+    # instead of calling gun directly. When that process is already a corpse the
+    # adapter's `GenServer.call` *exits* rather than returning an error tuple, so
+    # the transport death would otherwise escape `transport_dead_error?/1` and
+    # kill the caller. Re-shape it into the `:down:` form the retry path knows.
+    #
+    # Only `:noproc` / `:normal` are re-shaped: both mean the connection process
+    # was gone before it accepted the request, so a retry cannot double-execute.
+    # A `:timeout` exit deliberately propagates — the server may already have
+    # acted on the request.
+    :exit, {reason, {GenServer, :call, _}} when reason in [:noproc, :normal] ->
+      {:error,
+       %GRPC.RPCError{status: GRPC.Status.unavailable(), message: ":down: #{inspect(reason)}"}}
   end
 
   # Whether an RPC result is a transport-layer failure the client should retry

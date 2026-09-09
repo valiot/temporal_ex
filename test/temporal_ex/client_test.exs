@@ -162,31 +162,6 @@ defmodule TemporalEx.ClientTest do
       GenServer.stop(pid)
     end
 
-    test "late gun_down for an old conn_pid does not wipe a reconnected channel" do
-      {:ok, pid} = Client.start_link(target: "localhost:17233")
-
-      old_gun = spawn(fn -> Process.sleep(:infinity) end)
-      new_gun = spawn(fn -> Process.sleep(:infinity) end)
-
-      put_channel!(pid, new_gun)
-      assert channel_conn_pid(:sys.get_state(pid).channel) == new_gun
-
-      # Simulate a delayed down from a predecessor connection.
-      send(pid, {:gun_down, old_gun, :http2, :closed, []})
-      # Allow handle_info to run.
-      _ = :sys.get_state(pid)
-
-      assert channel_conn_pid(:sys.get_state(pid).channel) == new_gun
-
-      # A down for the current pid still clears.
-      send(pid, {:gun_down, new_gun, :http2, :closed, []})
-      _ = :sys.get_state(pid)
-      assert :sys.get_state(pid).channel == nil
-
-      for g <- [old_gun, new_gun], Process.alive?(g), do: Process.exit(g, :kill)
-      GenServer.stop(pid)
-    end
-
     test "namespace reads stay responsive while an RPC awaits gun" do
       # Before offloading I/O from the GenServer, a mid-flight RPC blocked
       # every other call (including cheap namespace reads) for the full gun
@@ -381,9 +356,16 @@ defmodule TemporalEx.ClientTest do
 
     spawn(fn ->
       receive do
+        # grpc >= 1.0 reaches the connection process with a `GenServer.call`;
+        # grpc 0.11 cast straight at gun. Accept either so the double stands in
+        # for whichever adapter protocol is in play.
+        {:"$gen_call", _from, _request} ->
+          # Delay so the caller installs its monitor before we exit — otherwise
+          # the race can report :noproc instead of reason.
+          Process.sleep(hold_ms)
+          exit(reason)
+
         {:"$gen_cast", _} ->
-          # Delay so gun.await installs its monitor before we exit —
-          # otherwise the race can report :noproc instead of reason.
           Process.sleep(hold_ms)
           exit(reason)
       end
@@ -404,7 +386,4 @@ defmodule TemporalEx.ClientTest do
       codec: GRPC.Codec.Proto
     }
   end
-
-  defp channel_conn_pid(%{adapter_payload: %{conn_pid: pid}}), do: pid
-  defp channel_conn_pid(_), do: nil
 end
