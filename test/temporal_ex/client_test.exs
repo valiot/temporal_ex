@@ -268,6 +268,31 @@ defmodule TemporalEx.ClientTest do
   end
 
   describe "transport_dead_error?/1" do
+    # grpc >= 1.0.6 (elixir-grpc/grpc#586) drops the leading colon from the
+    # transport tag — `"stream_error: …"` / `"connection_error: …"` — and moves
+    # connection errors to UNAVAILABLE (14). Classification must hold on both
+    # spellings, or a grpc bump silently disables the reconnect-and-retry path.
+    test "accepts the colon-less tags grpc 1.0.6+ emits" do
+      assert Client.transport_dead_error?(
+               {:error, %GRPC.RPCError{message: "stream_error: :closing"}}
+             )
+
+      assert Client.transport_dead_error?(
+               {:error,
+                %GRPC.RPCError{
+                  message: ~s(stream_error: {:goaway, :no_error, "The connection is going away."})
+                }}
+             )
+
+      assert Client.transport_dead_error?(
+               {:error, %GRPC.RPCError{status: 14, message: "connection_error: :closed"}}
+             )
+
+      refute Client.transport_dead_error?(
+               {:error, %GRPC.RPCError{message: "stream_error: :closed"}}
+             )
+    end
+
     # The transient transport failures do_rpc/6 reconnects + retries once (see
     # the retry-path tests above). Everything else is a real error the caller
     # must handle — never silently retried.

@@ -389,8 +389,10 @@ defmodule TemporalEx.Client do
   # processed the request before the reset, so an automatic retry of a
   # non-idempotent RPC (signal / update) could double-apply — those keep
   # surfacing as `code: 13` for the caller to decide.
+  # grpc < 1.0.6 tags these as `":stream_error: …"`; elixir-grpc/grpc#586 drops the
+  # leading colon. Match both so a grpc bump cannot silently disable this path.
   defp refused_stream?(message) do
-    String.starts_with?(message, ":stream_error:") and
+    String.starts_with?(message, [":stream_error:", "stream_error:"]) and
       (String.contains?(message, ":closing") or String.contains?(message, "{:goaway,"))
   end
 
