@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## 0.2.6 [2026-09-09]
+
+- [New Feature] `TemporalEx.describe_task_queue/2,3` — calls `WorkflowService/DescribeTaskQueue` and decodes it to a plain map: `%{pollers: [%{identity, last_access_time, rate_per_second}], stats: %{backlog_count, backlog_age_ms, tasks_add_rate, tasks_dispatch_rate} | nil}`. A worker polls per task type, so the queue is described per type — `:workflow` (default), `:activity`, or `:nexus`; `report_stats` defaults on, and `backlog_age_ms` stays `nil` when unreported so an unknown age never reads as a real 0. An empty `pollers` list is the direct answer to "nothing is listening on this queue". `TemporalEx.Converter.TaskQueue` holds the request builder and response decoder.
+
 ## 0.2.5 [2026-09-07]
 
 - [Fix] `TemporalEx.Client.Connection` temp PEM files now use a strongly-random name (`:crypto.strong_rand_bytes/1`) instead of `<os_pid>-<System.unique_integer/1>`. The 0.2.1 scheme is deterministic across BEAM *restarts* — a containerized BEAM keeps a stable OS pid and `unique_integer` resets from a low value on each boot — so a boot that wrote PEM files and crashed before cleanup (cleanup only runs on graceful shutdown) left names the next boot regenerated exactly. With a persisted `/tmp` (an emptyDir survives container restarts) every candidate then collides on `:eexist` and the client raises `could not allocate a unique temp PEM path after 8 attempts`, failing `TemporalEx.Client.init` and crash-looping the host application permanently. Random names are independent of pid, counter, and restart, so they never collide with leftover residue; the 8-attempt retry stays as defense-in-depth. Supersedes the 0.2.1 pid-suffix mitigation and covers both the multi-BEAM and the restart cases.

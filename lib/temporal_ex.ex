@@ -28,6 +28,7 @@ defmodule TemporalEx do
 
   alias TemporalEx.{Client, WorkflowHandle, ScheduleHandle}
   alias TemporalEx.Converter.{Common, Payload, Schedule}
+  alias TemporalEx.Converter.TaskQueue, as: TaskQueueConverter
   alias TemporalEx.Error
 
   @doc """
@@ -297,6 +298,49 @@ defmodule TemporalEx do
     case Client.rpc(client, :get_system_info, request) do
       {:ok, response} -> {:ok, response}
       {:error, err} -> {:error, Error.from_rpc_error(err)}
+    end
+  end
+
+  @doc """
+  Describes a task queue: who is polling it right now, and (by default) its
+  backlog/throughput stats.
+
+  A worker has separate pollers per task type, so a queue is described per
+  type — `:workflow` (default), `:activity`, or `:nexus`. To see both
+  sides of one queue name, call it once per type.
+
+  Returns a plain map — see `TemporalEx.Converter.TaskQueue.from_describe_response/1`
+  for the shape. An empty `pollers` list is the direct answer to "why is my
+  work sitting Scheduled": nothing is listening on that queue/type.
+
+  ## Options
+
+    * `:type` — `:workflow` (default) | `:activity` | `:nexus`
+    * `:report_stats` — include backlog/rate stats (default `true`)
+    * `:namespace` — override the client's namespace
+    * `:timeout` — RPC timeout in ms
+
+  ## Examples
+
+      {:ok, %{pollers: pollers, stats: stats}} =
+        TemporalEx.describe_task_queue(client, "warppipe-demo-ric")
+
+      {:ok, %{pollers: activity_pollers}} =
+        TemporalEx.describe_task_queue(client, "warppipe-demo-ric-cpu", type: :activity)
+  """
+  @spec describe_task_queue(GenServer.server(), String.t(), keyword()) ::
+          {:ok, map()} | {:error, Error.t()}
+  def describe_task_queue(client, task_queue_name, opts \\ []) do
+    namespace = Keyword.get(opts, :namespace) || Client.namespace(client)
+    request = TaskQueueConverter.to_describe_request(namespace, task_queue_name, opts)
+    rpc_opts = [namespace: namespace] ++ Keyword.take(opts, [:timeout])
+
+    case Client.rpc(client, :describe_task_queue, request, rpc_opts) do
+      {:ok, response} ->
+        {:ok, TaskQueueConverter.from_describe_response(response)}
+
+      {:error, err} ->
+        {:error, Error.from_rpc_error(err)}
     end
   end
 
