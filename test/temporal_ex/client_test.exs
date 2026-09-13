@@ -268,6 +268,41 @@ defmodule TemporalEx.ClientTest do
   end
 
   describe "transport_dead_error?/1" do
+    # The production regression behind CORE-243. grpc >= 1.0 refuses an RPC
+    # before sending it when the channel's connection process is gone —
+    # `GRPC.Stub.fallback_channel/1` returns UNAVAILABLE "no healthy connection
+    # available for #Reference<…>". Temporal recycles every connection about
+    # every five minutes, so that window is routine; unmatched, it leaked to
+    # callers and pipex's RunReconciler skipped runs. Matched by status, not
+    # text: the request was never transmitted, so the retry cannot double-apply.
+    test "classifies grpc's pre-flight UNAVAILABLE as transport-dead" do
+      assert Client.transport_dead_error?(
+               {:error,
+                %GRPC.RPCError{
+                  status: 14,
+                  message:
+                    "no healthy connection available for #Reference<0.2455504763.15466498.28803>"
+                }}
+             )
+
+      # Any UNAVAILABLE qualifies — a connect that never landed reports it with
+      # wording we do not control, and gRPC defines the code as not-processed.
+      assert Client.transport_dead_error?(
+               {:error, %GRPC.RPCError{status: 14, message: "failed to connect to all addresses"}}
+             )
+    end
+
+    # A server-side error carrying no transport tag must never be retried
+    # silently; only UNAVAILABLE gets the status-based pass.
+    test "leaves other status codes to the caller" do
+      for status <- [2, 3, 5, 8, 13] do
+        refute Client.transport_dead_error?(
+                 {:error, %GRPC.RPCError{status: status, message: "boom"}}
+               ),
+               "expected status #{status} to stay caller-visible"
+      end
+    end
+
     # grpc >= 1.0.6 (elixir-grpc/grpc#586) drops the leading colon from the
     # transport tag — `"stream_error: …"` / `"connection_error: …"` — and moves
     # connection errors to UNAVAILABLE (14). Classification must hold on both
