@@ -36,9 +36,6 @@ defmodule TemporalEx.Client do
 
   @workflow_service_stub Temporal.Api.Workflowservice.V1.WorkflowService.Stub
 
-  # Resolved at compile time so it can be matched in a function head.
-  @grpc_unavailable GRPC.Status.unavailable()
-
   # ── Public API ──────────────────────────────────────────────────────
 
   @doc """
@@ -353,25 +350,26 @@ defmodule TemporalEx.Client do
 
   # Whether an RPC result is a transport-layer failure the client should retry
   # once on a fresh channel (see `do_rpc/6`), as opposed to a real server-side
-  # error the caller must handle. Two shapes reach here:
+  # error the caller must handle. Matched by message, because the message is
+  # what says whether the request can have reached the server:
   #
-  #   * `UNAVAILABLE` — matched by status. grpc >= 1.0 fails an RPC *before
-  #     sending it* when the channel's connection process is gone
-  #     (`GRPC.Stub.fallback_channel/1` → "no healthy connection available for
-  #     …"), which is the routine state during Temporal's ~5-minute
-  #     `keepAliveMaxConnectionAge` recycle, not an outage. gRPC defines
-  #     UNAVAILABLE as "the RPC was not processed, safe to retry", and matching
-  #     the code rather than the text survives upstream rewording — the
-  #     `:stream_error:` → `stream_error:` rename in elixir-grpc/grpc#586
-  #     already broke one of the message checks below.
-  #   * a message tagging the transport reason — `:down: …` /
-  #     `connection_error` (gun died, or couldn't reach the server), or a
-  #     *refused* stream, see `refused_stream?/1`.
+  #   * `:down: …` / `connection_error` — gun died / couldn't reach the server.
+  #   * `no healthy connection available …` — grpc >= 1.0 refuses an RPC
+  #     *before sending it* when the channel's connection process is gone
+  #     (`GRPC.Stub.fallback_channel/1`). Routine during Temporal's ~5-minute
+  #     `keepAliveMaxConnectionAge` recycle.
+  #   * a *refused* stream — see `refused_stream?/1`.
+  #
+  # Not matched by status. grpc >= 1.0 answers `UNAVAILABLE` for two different
+  # situations: the pre-flight refusal above, where nothing was transmitted,
+  # and a connection dying *mid-stream* (`{:connection_error, …}` pushed to
+  # in-flight streams), where the server may already have applied the request.
+  # Retrying the second could double-apply a signal or an update, so the status
+  # alone is not enough to license a replay — only the message tells them
+  # apart, at the cost of coupling to upstream wording.
   #
   # `@doc false`: exposed only so the classification is unit-testable.
   @doc false
-  def transport_dead_error?({:error, %GRPC.RPCError{status: @grpc_unavailable}}), do: true
-
   def transport_dead_error?({:error, %GRPC.RPCError{message: message}})
       when is_binary(message) do
     transport_dead_message?(message)
@@ -383,6 +381,7 @@ defmodule TemporalEx.Client do
     String.starts_with?(message, ":down:") or
       String.starts_with?(message, ":connection_error:") or
       String.contains?(message, "connection_error") or
+      String.starts_with?(message, "no healthy connection available") or
       refused_stream?(message)
   end
 

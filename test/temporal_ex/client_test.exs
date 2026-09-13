@@ -273,9 +273,9 @@ defmodule TemporalEx.ClientTest do
     # `GRPC.Stub.fallback_channel/1` returns UNAVAILABLE "no healthy connection
     # available for #Reference<…>". Temporal recycles every connection about
     # every five minutes, so that window is routine; unmatched, it leaked to
-    # callers and pipex's RunReconciler skipped runs. Matched by status, not
-    # text: the request was never transmitted, so the retry cannot double-apply.
-    test "classifies grpc's pre-flight UNAVAILABLE as transport-dead" do
+    # callers and pipex's RunReconciler skipped runs. Nothing was transmitted,
+    # so the retry cannot double-apply.
+    test "classifies grpc's pre-flight refusal as transport-dead" do
       assert Client.transport_dead_error?(
                {:error,
                 %GRPC.RPCError{
@@ -284,47 +284,17 @@ defmodule TemporalEx.ClientTest do
                     "no healthy connection available for #Reference<0.2455504763.15466498.28803>"
                 }}
              )
-
-      # Any UNAVAILABLE qualifies — a connect that never landed reports it with
-      # wording we do not control, and gRPC defines the code as not-processed.
-      assert Client.transport_dead_error?(
-               {:error, %GRPC.RPCError{status: 14, message: "failed to connect to all addresses"}}
-             )
     end
 
-    # A server-side error carrying no transport tag must never be retried
-    # silently; only UNAVAILABLE gets the status-based pass.
-    test "leaves other status codes to the caller" do
-      for status <- [2, 3, 5, 8, 13] do
-        refute Client.transport_dead_error?(
-                 {:error, %GRPC.RPCError{status: status, message: "boom"}}
-               ),
-               "expected status #{status} to stay caller-visible"
-      end
-    end
-
-    # grpc >= 1.0.6 (elixir-grpc/grpc#586) drops the leading colon from the
-    # transport tag — `"stream_error: …"` / `"connection_error: …"` — and moves
-    # connection errors to UNAVAILABLE (14). Classification must hold on both
-    # spellings, or a grpc bump silently disables the reconnect-and-retry path.
-    test "accepts the colon-less tags grpc 1.0.6+ emits" do
-      assert Client.transport_dead_error?(
-               {:error, %GRPC.RPCError{message: "stream_error: :closing"}}
-             )
-
-      assert Client.transport_dead_error?(
-               {:error,
-                %GRPC.RPCError{
-                  message: ~s(stream_error: {:goaway, :no_error, "The connection is going away."})
-                }}
-             )
-
-      assert Client.transport_dead_error?(
-               {:error, %GRPC.RPCError{status: 14, message: "connection_error: :closed"}}
-             )
-
+    # Deliberately NOT status-based. grpc >= 1.0 also answers UNAVAILABLE when a
+    # connection dies mid-stream, where the server may already have applied the
+    # request — replaying a signal or an update there could double-apply. Only
+    # the message distinguishes that from the pre-flight refusal above, so an
+    # UNAVAILABLE carrying neither a transport tag nor the pre-flight wording
+    # must stay caller-visible.
+    test "does not retry an UNAVAILABLE on status alone" do
       refute Client.transport_dead_error?(
-               {:error, %GRPC.RPCError{message: "stream_error: :closed"}}
+               {:error, %GRPC.RPCError{status: 14, message: "service is shutting down"}}
              )
     end
 
