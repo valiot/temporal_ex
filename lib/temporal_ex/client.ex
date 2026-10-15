@@ -361,13 +361,15 @@ defmodule TemporalEx.Client do
   #     `keepAliveMaxConnectionAge` recycle.
   #   * a *refused* stream — see `refused_stream?/1`.
   #
-  # Not matched by status. grpc >= 1.0 answers `UNAVAILABLE` for two different
-  # situations: the pre-flight refusal above, where nothing was transmitted,
-  # and a connection dying *mid-stream* (`{:connection_error, …}` pushed to
-  # in-flight streams), where the server may already have applied the request.
-  # Retrying the second could double-apply a signal or an update, so the status
-  # alone is not enough to license a replay — only the message tells them
-  # apart, at the cost of coupling to upstream wording.
+  # Not matched by status: an `UNAVAILABLE` carrying none of the messages above
+  # is no evidence that the request never left, so it stays caller-visible.
+  # The cost is coupling to upstream wording.
+  #
+  # `connection_error` is deliberately retried even though it is not a
+  # pre-flight failure: when a connection dies *mid-stream* the server may
+  # already have applied the request, so a replayed signal or update can be
+  # applied twice. That has been the trade since 0.2.2; matching it here
+  # neither introduces nor removes it.
   #
   # `@doc false`: exposed only so the classification is unit-testable.
   @doc false

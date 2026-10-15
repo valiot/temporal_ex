@@ -287,12 +287,9 @@ defmodule TemporalEx.ClientTest do
              )
     end
 
-    # Deliberately NOT status-based. grpc >= 1.0 also answers UNAVAILABLE when a
-    # connection dies mid-stream, where the server may already have applied the
-    # request — replaying a signal or an update there could double-apply. Only
-    # the message distinguishes that from the pre-flight refusal above, so an
-    # UNAVAILABLE carrying neither a transport tag nor the pre-flight wording
-    # must stay caller-visible.
+    # Deliberately NOT status-based. An UNAVAILABLE carrying neither a transport
+    # tag nor the pre-flight wording is no evidence that the request never
+    # left, so it must stay caller-visible.
     test "does not retry an UNAVAILABLE on status alone" do
       refute Client.transport_dead_error?(
                {:error, %GRPC.RPCError{status: 14, message: "service is shutting down"}}
