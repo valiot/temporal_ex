@@ -326,6 +326,25 @@ defmodule TemporalEx.ClientTest do
              )
     end
 
+    # elixir-grpc/grpc#586 drops the leading colon from the gun adapter's tags;
+    # the refused-stream retry must survive that rename.
+    test "retries a refused stream in the colon-less spelling too" do
+      assert Client.transport_dead_error?(
+               {:error, %GRPC.RPCError{message: "stream_error: :closing"}}
+             )
+
+      assert Client.transport_dead_error?(
+               {:error,
+                %GRPC.RPCError{
+                  message: ~s(stream_error: {:goaway, :no_error, "The connection is going away."})
+                }}
+             )
+
+      refute Client.transport_dead_error?(
+               {:error, %GRPC.RPCError{message: "stream_error: :closed"}}
+             )
+    end
+
     # A server-sent RST (`:cancel`) or a mid-flight `:closed` may have been
     # processed before the reset — NOT retried, so a non-idempotent RPC (signal
     # / update) can't double-apply; the caller sees `code: 13` and decides.
