@@ -281,8 +281,7 @@ defmodule TemporalEx.ClientTest do
                {:error,
                 %GRPC.RPCError{
                   status: 14,
-                  message:
-                    "no healthy connection available for #Reference<0.2455504763.15466498.28803>"
+                  message: "no healthy connection available for #{inspect(make_ref())}"
                 }}
              )
     end
