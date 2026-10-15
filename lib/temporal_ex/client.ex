@@ -246,22 +246,6 @@ defmodule TemporalEx.Client do
   end
 
   @impl true
-  def handle_info({:gun_up, _pid, :http2}, state) do
-    {:noreply, state}
-  end
-
-  # Only clear when the downed pid is the channel we currently hold. A late
-  # gun_down from a dead predecessor must not wipe a successful reconnect
-  # (and leak the new gun by dropping our only reference without disconnect).
-  @impl true
-  def handle_info({:gun_down, pid, :http2, _reason, _killed_streams}, state) do
-    case channel_conn_pid(state.channel) do
-      ^pid -> {:noreply, %{state | channel: nil}}
-      _ -> {:noreply, state}
-    end
-  end
-
-  @impl true
   def terminate(_reason, state) do
     case Map.get(state, :meta_ref) do
       nil -> :ok
@@ -348,15 +332,44 @@ defmodule TemporalEx.Client do
     else
       {:error, "Unknown Temporal RPC: #{rpc_name}"}
     end
+  catch
+    # grpc >= 1.0 sends the request through a per-channel connection GenServer
+    # instead of calling gun directly. When that process is already a corpse the
+    # adapter's `GenServer.call` *exits* rather than returning an error tuple, so
+    # the transport death would otherwise escape `transport_dead_error?/1` and
+    # kill the caller. Re-shape it into the `:down:` form the retry path knows.
+    #
+    # Only `:noproc` / `:normal` are re-shaped: both mean the connection process
+    # was gone before it accepted the request, so a retry cannot double-execute.
+    # A `:timeout` exit deliberately propagates — the server may already have
+    # acted on the request.
+    :exit, {reason, {GenServer, :call, _}} when reason in [:noproc, :normal] ->
+      {:error,
+       %GRPC.RPCError{status: GRPC.Status.unavailable(), message: ":down: #{inspect(reason)}"}}
   end
 
   # Whether an RPC result is a transport-layer failure the client should retry
   # once on a fresh channel (see `do_rpc/6`), as opposed to a real server-side
-  # error the caller must handle. Gun maps these to `%GRPC.RPCError{}` with a
-  # message tagging the transport reason:
+  # error the caller must handle. Matched by message, because the message is
+  # what says whether the request can have reached the server:
   #
   #   * `:down: …` / `connection_error` — gun died / couldn't reach the server.
+  #   * `no healthy connection available …` — grpc's main branch after 1.0.5
+  #     (elixir-grpc/grpc#568, not yet released) refuses an RPC *before
+  #     sending it* when the channel's connection process is gone (`GRPC.Stub`'s
+  #     private `fallback_channel/1`). Routine during Temporal's ~5-minute
+  #     `keepAliveMaxConnectionAge` recycle.
   #   * a *refused* stream — see `refused_stream?/1`.
+  #
+  # Not matched by status: an `UNAVAILABLE` carrying none of the messages above
+  # is no evidence that the request never left, so it stays caller-visible.
+  # The cost is coupling to upstream wording.
+  #
+  # `connection_error` is deliberately retried even though it is not a
+  # pre-flight failure: when a connection dies *mid-stream* the server may
+  # already have applied the request, so a replayed signal or update can be
+  # applied twice. That has been the trade since 0.2.2; matching it here
+  # neither introduces nor removes it.
   #
   # `@doc false`: exposed only so the classification is unit-testable.
   @doc false
@@ -371,6 +384,7 @@ defmodule TemporalEx.Client do
     String.starts_with?(message, ":down:") or
       String.starts_with?(message, ":connection_error:") or
       String.contains?(message, "connection_error") or
+      String.starts_with?(message, "no healthy connection available") or
       refused_stream?(message)
   end
 
@@ -391,8 +405,10 @@ defmodule TemporalEx.Client do
   # processed the request before the reset, so an automatic retry of a
   # non-idempotent RPC (signal / update) could double-apply — those keep
   # surfacing as `code: 13` for the caller to decide.
+  # grpc < 1.0.6 tags these as `":stream_error: …"`; elixir-grpc/grpc#586 drops the
+  # leading colon. Match both so a grpc bump cannot silently disable this path.
   defp refused_stream?(message) do
-    String.starts_with?(message, ":stream_error:") and
+    String.starts_with?(message, [":stream_error:", "stream_error:"]) and
       (String.contains?(message, ":closing") or String.contains?(message, "{:goaway,"))
   end
 

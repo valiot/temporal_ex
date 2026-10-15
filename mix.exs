@@ -4,7 +4,7 @@ defmodule TemporalEx.MixProject do
   def project do
     [
       app: :temporal_ex,
-      version: "0.2.7",
+      version: "0.3.0",
       elixir: "~> 1.15",
       start_permanent: Mix.env() == :prod,
       description: "Ergonomic Temporal client SDK for Elixir",
@@ -34,8 +34,9 @@ defmodule TemporalEx.MixProject do
 
   defp deps do
     [
-      {:temporalio, "~> 1.21"},
-      {:grpc, "~> 0.11"},
+      {:temporalio, "~> 1.63"},
+      {:grpc, "~> 1.0"},
+      {:gun, "~> 2.4"},
       {:castore, "~> 1.0"},
       {:jason, "~> 1.4"},
 

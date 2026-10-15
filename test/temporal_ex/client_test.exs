@@ -162,31 +162,6 @@ defmodule TemporalEx.ClientTest do
       GenServer.stop(pid)
     end
 
-    test "late gun_down for an old conn_pid does not wipe a reconnected channel" do
-      {:ok, pid} = Client.start_link(target: "localhost:17233")
-
-      old_gun = spawn(fn -> Process.sleep(:infinity) end)
-      new_gun = spawn(fn -> Process.sleep(:infinity) end)
-
-      put_channel!(pid, new_gun)
-      assert channel_conn_pid(:sys.get_state(pid).channel) == new_gun
-
-      # Simulate a delayed down from a predecessor connection.
-      send(pid, {:gun_down, old_gun, :http2, :closed, []})
-      # Allow handle_info to run.
-      _ = :sys.get_state(pid)
-
-      assert channel_conn_pid(:sys.get_state(pid).channel) == new_gun
-
-      # A down for the current pid still clears.
-      send(pid, {:gun_down, new_gun, :http2, :closed, []})
-      _ = :sys.get_state(pid)
-      assert :sys.get_state(pid).channel == nil
-
-      for g <- [old_gun, new_gun], Process.alive?(g), do: Process.exit(g, :kill)
-      GenServer.stop(pid)
-    end
-
     test "namespace reads stay responsive while an RPC awaits gun" do
       # Before offloading I/O from the GenServer, a mid-flight RPC blocked
       # every other call (including cheap namespace reads) for the full gun
@@ -293,6 +268,33 @@ defmodule TemporalEx.ClientTest do
   end
 
   describe "transport_dead_error?/1" do
+    # A production regression. grpc's main branch after 1.0.5
+    # (elixir-grpc/grpc#568, not yet released) refuses an RPC before sending it
+    # when the channel's connection process is gone — `GRPC.Stub`'s private
+    # `fallback_channel/1` returns UNAVAILABLE "no healthy connection available
+    # for #Reference<…>". Temporal recycles every connection about
+    # every five minutes, so that window is routine; unmatched, it leaked to
+    # callers and pipex's RunReconciler skipped runs. Nothing was transmitted,
+    # so the retry cannot double-apply.
+    test "classifies grpc's pre-flight refusal as transport-dead" do
+      assert Client.transport_dead_error?(
+               {:error,
+                %GRPC.RPCError{
+                  status: 14,
+                  message: "no healthy connection available for #{inspect(make_ref())}"
+                }}
+             )
+    end
+
+    # Deliberately NOT status-based. An UNAVAILABLE carrying neither a transport
+    # tag nor the pre-flight wording is no evidence that the request never
+    # left, so it must stay caller-visible.
+    test "does not retry an UNAVAILABLE on status alone" do
+      refute Client.transport_dead_error?(
+               {:error, %GRPC.RPCError{status: 14, message: "service is shutting down"}}
+             )
+    end
+
     # The transient transport failures do_rpc/6 reconnects + retries once (see
     # the retry-path tests above). Everything else is a real error the caller
     # must handle — never silently retried.
@@ -320,6 +322,25 @@ defmodule TemporalEx.ClientTest do
                   message:
                     ~s(:stream_error: {:goaway, :no_error, "The connection is going away."})
                 }}
+             )
+    end
+
+    # elixir-grpc/grpc#586 drops the leading colon from the gun adapter's tags;
+    # the refused-stream retry must survive that rename.
+    test "retries a refused stream in the colon-less spelling too" do
+      assert Client.transport_dead_error?(
+               {:error, %GRPC.RPCError{message: "stream_error: :closing"}}
+             )
+
+      assert Client.transport_dead_error?(
+               {:error,
+                %GRPC.RPCError{
+                  message: ~s(stream_error: {:goaway, :no_error, "The connection is going away."})
+                }}
+             )
+
+      refute Client.transport_dead_error?(
+               {:error, %GRPC.RPCError{message: "stream_error: :closed"}}
              )
     end
 
@@ -381,9 +402,16 @@ defmodule TemporalEx.ClientTest do
 
     spawn(fn ->
       receive do
+        # grpc >= 1.0 reaches the connection process with a `GenServer.call`;
+        # grpc 0.11 cast straight at gun. Accept either so the double stands in
+        # for whichever adapter protocol is in play.
+        {:"$gen_call", _from, _request} ->
+          # Delay so the caller installs its monitor before we exit — otherwise
+          # the race can report :noproc instead of reason.
+          Process.sleep(hold_ms)
+          exit(reason)
+
         {:"$gen_cast", _} ->
-          # Delay so gun.await installs its monitor before we exit —
-          # otherwise the race can report :noproc instead of reason.
           Process.sleep(hold_ms)
           exit(reason)
       end
@@ -404,7 +432,4 @@ defmodule TemporalEx.ClientTest do
       codec: GRPC.Codec.Proto
     }
   end
-
-  defp channel_conn_pid(%{adapter_payload: %{conn_pid: pid}}), do: pid
-  defp channel_conn_pid(_), do: nil
 end
