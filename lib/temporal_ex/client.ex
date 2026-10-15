@@ -354,9 +354,10 @@ defmodule TemporalEx.Client do
   # what says whether the request can have reached the server:
   #
   #   * `:down: …` / `connection_error` — gun died / couldn't reach the server.
-  #   * `no healthy connection available …` — grpc >= 1.0 refuses an RPC
-  #     *before sending it* when the channel's connection process is gone
-  #     (`GRPC.Stub.fallback_channel/1`). Routine during Temporal's ~5-minute
+  #   * `no healthy connection available …` — grpc's main branch after 1.0.5
+  #     (elixir-grpc/grpc#568, not yet released) refuses an RPC *before
+  #     sending it* when the channel's connection process is gone (`GRPC.Stub`'s
+  #     private `fallback_channel/1`). Routine during Temporal's ~5-minute
   #     `keepAliveMaxConnectionAge` recycle.
   #   * a *refused* stream — see `refused_stream?/1`.
   #

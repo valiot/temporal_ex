@@ -268,10 +268,11 @@ defmodule TemporalEx.ClientTest do
   end
 
   describe "transport_dead_error?/1" do
-    # The production regression behind CORE-243. grpc >= 1.0 refuses an RPC
-    # before sending it when the channel's connection process is gone —
-    # `GRPC.Stub.fallback_channel/1` returns UNAVAILABLE "no healthy connection
-    # available for #Reference<…>". Temporal recycles every connection about
+    # A production regression. grpc's main branch after 1.0.5
+    # (elixir-grpc/grpc#568, not yet released) refuses an RPC before sending it
+    # when the channel's connection process is gone — `GRPC.Stub`'s private
+    # `fallback_channel/1` returns UNAVAILABLE "no healthy connection available
+    # for #Reference<…>". Temporal recycles every connection about
     # every five minutes, so that window is routine; unmatched, it leaked to
     # callers and pipex's RunReconciler skipped runs. Nothing was transmitted,
     # so the retry cannot double-apply.
