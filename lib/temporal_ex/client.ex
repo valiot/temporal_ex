@@ -16,7 +16,8 @@ defmodule TemporalEx.Client do
       from `:persistent_term` and never touch the GenServer mailbox, so they
       can't queue behind a long `StartWorkflowExecution` *or* a blocking
       (re)connect
-    * when gun dies mid-RPC (`:down: :normal` / `:noproc`), or the server
+    * when gun dies mid-RPC (`:down: :normal` / `:noproc`), the connection
+      process stops on a recycle (`{:shutdown, {:gun_down, …}}`), or the server
       drains a live connection mid-RPC (`:stream_error: :closing` — the HTTP/2
       GOAWAY a periodic `keepAliveMaxConnectionAge` recycle sends), the channel
       is dropped and the **same** `rpc/4` call reconnects and retries once —
@@ -334,19 +335,37 @@ defmodule TemporalEx.Client do
     end
   catch
     # grpc >= 1.0 sends the request through a per-channel connection GenServer
-    # instead of calling gun directly. When that process is already a corpse the
-    # adapter's `GenServer.call` *exits* rather than returning an error tuple, so
-    # the transport death would otherwise escape `transport_dead_error?/1` and
-    # kill the caller. Re-shape it into the `:down:` form the retry path knows.
+    # instead of calling gun directly. When that process is gone the adapter's
+    # `GenServer.call` *exits* rather than returning an error tuple. grpc logs
+    # the exit from `GRPC.Telemetry.client_span/3` and re-raises it, so without
+    # this catch it escapes `transport_dead_error?/1` and kills the caller.
+    # Re-shape it into the `:down:` form the retry path knows.
     #
-    # Only `:noproc` / `:normal` are re-shaped: both mean the connection process
-    # was gone before it accepted the request, so a retry cannot double-execute.
-    # A `:timeout` exit deliberately propagates — the server may already have
-    # acted on the request.
-    :exit, {reason, {GenServer, :call, _}} when reason in [:noproc, :normal] ->
-      {:error,
-       %GRPC.RPCError{status: GRPC.Status.unavailable(), message: ":down: #{inspect(reason)}"}}
+    # A call that exits because the connection process stopped never got a
+    # reply: grpc #586 stops that process from `handle_info` with
+    # `{:shutdown, {:gun_down, _}}` when gun dies, and queued calls are not
+    # processed, so a retry cannot double-execute. `:timeout` still propagates
+    # — the process may be handling the request and the server may have acted.
+    :exit, {reason, {GenServer, :call, _}} = caught ->
+      if connection_call_unanswered?(reason) do
+        {:error,
+         %GRPC.RPCError{
+           status: GRPC.Status.unavailable(),
+           message: ":down: #{inspect(reason)}"
+         }}
+      else
+        :erlang.raise(:exit, caught, __STACKTRACE__)
+      end
   end
+
+  # The connection process died without replying, so it did not accept the
+  # request. `:timeout` is deliberately absent.
+  defp connection_call_unanswered?(:noproc), do: true
+  defp connection_call_unanswered?(:normal), do: true
+  defp connection_call_unanswered?(:killed), do: true
+  defp connection_call_unanswered?(:shutdown), do: true
+  defp connection_call_unanswered?({:shutdown, _}), do: true
+  defp connection_call_unanswered?(_reason), do: false
 
   # Whether an RPC result is a transport-layer failure the client should retry
   # once on a fresh channel (see `do_rpc/6`), as opposed to a real server-side

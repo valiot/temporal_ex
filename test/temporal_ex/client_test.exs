@@ -130,6 +130,35 @@ defmodule TemporalEx.ClientTest do
       GenServer.stop(pid)
     end
 
+    # Production race: grpc's liveness check sees a live conn_pid,
+    # then the process exits :noproc when the call arrives. GenServer.call
+    # raises; grpc logs it from client_span before re-raising. The caller must
+    # get an error and a second connect, not die.
+    test "retries once when a live connection process exits :noproc on the call" do
+      assert_retries_after_conn_exit(:noproc)
+    end
+
+    # grpc #586 stops ConnectionProcess with {:shutdown, {:gun_down, reason}}
+    # when gun dies. A call in flight exits with that reason. It must take the
+    # same retry as :noproc — a recycle must not kill the caller.
+    test "retries once when the connection process stops with gun_down shutdown" do
+      assert_retries_after_conn_exit({:shutdown, {:gun_down, :closed}})
+    end
+
+    # The server may already have acted. Must not be swallowed into a retry.
+    # The double exits :timeout on the call so this does not wait out gun's
+    # 5s GenServer.call default.
+    test "a GenServer.call timeout still escapes" do
+      {:ok, pid} = Client.start_link(target: "localhost:17233")
+      put_channel!(pid, exits_on_call(:timeout))
+      request = %Temporal.Api.Workflowservice.V1.GetSystemInfoRequest{}
+
+      assert {:timeout, {GenServer, :call, _}} =
+               catch_exit(Client.rpc(pid, :get_system_info, request, timeout: 2_000))
+
+      GenServer.stop(pid)
+    end
+
     test "transport death triggers a second connect attempt on the same rpc" do
       # Without a live Temporal we cannot assert a successful retry body;
       # prove the retry *path* instead: connect is invoked twice per rpc
@@ -376,6 +405,39 @@ defmodule TemporalEx.ClientTest do
   # `:gun.await` monitors it. When the process exits mid-await, gun returns
   # `{:error, {:down, reason}}` which the GRPC gun adapter turns into
   # `%GRPC.RPCError{status: 2, message: ":down: #{inspect(reason)}"}`.
+
+  defp assert_retries_after_conn_exit(exit_reason) do
+    {:ok, attempts} = Agent.start_link(fn -> 0 end)
+
+    connect_fun = fn _server, _opts ->
+      n = Agent.get_and_update(attempts, fn c -> {c + 1, c + 1} end)
+
+      case n do
+        1 -> {:ok, channel_for(exits_on_call(exit_reason))}
+        _ -> {:error, :econnrefused}
+      end
+    end
+
+    {:ok, pid} = Client.start_link(target: "localhost:17233", connect_fun: connect_fun)
+    request = %Temporal.Api.Workflowservice.V1.GetSystemInfoRequest{}
+
+    assert {:error, "Temporal connection error:" <> _} =
+             Client.rpc(pid, :get_system_info, request, timeout: 2_000)
+
+    assert Agent.get(attempts, & &1) == 2
+    assert :sys.get_state(pid).channel == nil
+
+    GenServer.stop(pid)
+    Agent.stop(attempts)
+  end
+
+  defp exits_on_call(reason) do
+    spawn(fn ->
+      receive do
+        {:"$gen_call", _from, _} -> exit(reason)
+      end
+    end)
+  end
 
   defp install_dying_channel!(client, opts) do
     put_channel!(client, dying_conn_pid(opts))
