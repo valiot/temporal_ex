@@ -34,8 +34,8 @@ defmodule TemporalEx.MixProject do
 
   defp deps do
     [
-      {:temporalio, "~> 1.63"},
-      {:grpc, "~> 1.0"},
+      {:temporalio, "~> 1.64"},
+      {:grpc, "~> 1.0 and >= 1.0.6"},
       {:gun, "~> 2.4"},
       {:castore, "~> 1.0"},
       {:jason, "~> 1.4"},
