@@ -342,8 +342,10 @@ defmodule TemporalEx.Client do
     # Only `:noproc` / `:normal` are re-shaped: both mean the connection process
     # was gone before it accepted the request, so a retry cannot double-execute.
     # A `:timeout` exit deliberately propagates — the server may already have
-    # acted on the request.
-    :exit, {reason, {GenServer, :call, _}} when reason in [:noproc, :normal] ->
+    # acted on the request. Matched on the adapter's `{:request, …}` call so an
+    # unrelated GenServer exit inside the stub is not mistaken for a dead connection.
+    :exit, {reason, {GenServer, :call, [_conn_pid, {:request, _path, _headers, _body}, _timeout]}}
+    when reason in [:noproc, :normal] ->
       {:error,
        %GRPC.RPCError{status: GRPC.Status.unavailable(), message: ":down: #{inspect(reason)}"}}
   end
