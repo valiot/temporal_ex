@@ -4,7 +4,7 @@
 
 - [Improvement] Moved to `grpc` 1.0.6 (from 0.11.5) through `temporalio` 1.64.1, clearing CVE-2026-48853 (CRITICAL) and CVE-2026-48599 / CVE-2026-53430 / CVE-2026-48854 (HIGH). 1.0.6 is the minimum: it fixes the gun adapter wedging every RPC after a connection drop.
 - [Improvement] `gun` is a direct dependency, since grpc 1.0 no longer brings an HTTP/2 transport on its own. grpc requires `gun ~> 2.4.0`, so it moves from 2.6.0 to 2.4.1.
-- [Fix] Adapted `TemporalEx.Client` to grpc 1.0's connection model: grpc's application now starts `GRPC.Client.Supervisor`, and a dead connection's `:noproc` / `:normal` exit goes through the reconnect-and-retry-once path. No public API change.
+- [Fix] Adapted `TemporalEx.Client` to grpc 1.0's connection model: grpc's application now starts `GRPC.Client.Supervisor`, and an RPC refused by a stopped connection process (`:noproc`, `:normal`, `:shutdown` or `{:shutdown, _}`) goes through the reconnect-and-retry-once path. No public API change.
 - [Fix] grpc 1.0.6's pre-flight refusal of an RPC on a dead connection (`UNAVAILABLE "no healthy connection available…"`) is retried after a reconnect, so a Temporal connection recycle no longer reaches callers. Other `UNAVAILABLE` errors still surface, since the server may already have acted on them.
 
 ## 0.2.7 [2026-09-09]
