@@ -113,6 +113,25 @@ defmodule TemporalEx.ClientTest do
       GenServer.stop(pid)
     end
 
+    # grpc's connection process stops with `{:shutdown, {:gun_down, reason}}`
+    # when gun dies, and with `:shutdown` when its supervisor stops it. A
+    # request queued behind either stop never reached gun, so it is retried.
+    test "retries once when the connection process stops with a shutdown reason" do
+      {:ok, pid} = Client.start_link(target: "localhost:17233")
+      request = %Temporal.Api.Workflowservice.V1.GetSystemInfoRequest{}
+
+      for reason <- [:shutdown, {:shutdown, {:gun_down, :closed}}] do
+        install_dying_channel!(pid, exit_reason: reason, hold_ms: 20)
+
+        assert {:error, "Temporal connection error:" <> _} =
+                 Client.rpc(pid, :get_system_info, request, timeout: 2_000)
+
+        assert :sys.get_state(pid).channel == nil
+      end
+
+      GenServer.stop(pid)
+    end
+
     test "retries once after gun dies mid-RPC with :noproc" do
       {:ok, pid} = Client.start_link(target: "localhost:17233")
 

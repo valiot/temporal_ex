@@ -36,6 +36,10 @@ defmodule TemporalEx.Client do
 
   @workflow_service_stub Temporal.Api.Workflowservice.V1.WorkflowService.Stub
 
+  defguardp connection_stopped(reason)
+            when reason in [:noproc, :normal, :shutdown] or
+                   (is_tuple(reason) and tuple_size(reason) == 2 and elem(reason, 0) == :shutdown)
+
   # ── Public API ──────────────────────────────────────────────────────
 
   @doc """
@@ -339,13 +343,16 @@ defmodule TemporalEx.Client do
     # the transport death would otherwise escape `transport_dead_error?/1` and
     # kill the caller. Re-shape it into the `:down:` form the retry path knows.
     #
-    # Only `:noproc` / `:normal` are re-shaped: both mean the connection process
-    # was gone before it accepted the request, so a retry cannot double-execute.
-    # A `:timeout` exit deliberately propagates — the server may already have
-    # acted on the request. Matched on the adapter's `{:request, …}` call so an
-    # unrelated GenServer exit inside the stub is not mistaken for a dead connection.
+    # Only reasons that mean the connection process stopped are re-shaped:
+    # `:noproc`, `:normal` (disconnect), `:shutdown` (its supervisor) and
+    # `{:shutdown, _}` (gun died). The process posts to gun and replies inside the
+    # same `handle_call`, so a call that exits with one of these never reached
+    # gun and a retry cannot double-execute. A `:timeout` exit deliberately
+    # propagates — the server may already have acted on the request. Matched on
+    # the adapter's `{:request, …}` call so an unrelated GenServer exit inside
+    # the stub is not mistaken for a dead connection.
     :exit, {reason, {GenServer, :call, [_conn_pid, {:request, _path, _headers, _body}, _timeout]}}
-    when reason in [:noproc, :normal] ->
+    when connection_stopped(reason) ->
       {:error,
        %GRPC.RPCError{status: GRPC.Status.unavailable(), message: ":down: #{inspect(reason)}"}}
   end
