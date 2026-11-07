@@ -363,7 +363,7 @@ defmodule TemporalEx.Client do
   # what says whether the request can have reached the server:
   #
   #   * `:down: …` / `connection_error` — gun died / couldn't reach the server.
-  #   * `no healthy connection available …` — grpc >= 1.0.6 refuses an RPC
+  #   * `no healthy connection available …` with `UNAVAILABLE` — grpc >= 1.0.6 refuses an RPC
   #     *before sending it* when the channel's connection process is gone (`GRPC.Stub`'s
   #     private `fallback_channel/1`). Routine during Temporal's ~5-minute
   #     `keepAliveMaxConnectionAge` recycle.
@@ -381,9 +381,9 @@ defmodule TemporalEx.Client do
   #
   # `@doc false`: exposed only so the classification is unit-testable.
   @doc false
-  def transport_dead_error?({:error, %GRPC.RPCError{message: message}})
+  def transport_dead_error?({:error, %GRPC.RPCError{status: status, message: message}})
       when is_binary(message) do
-    transport_dead_message?(message)
+    transport_dead_message?(message) or preflight_refusal?(status, message)
   end
 
   def transport_dead_error?(_), do: false
@@ -391,8 +391,12 @@ defmodule TemporalEx.Client do
   defp transport_dead_message?(message) do
     String.starts_with?(message, ":down:") or
       String.starts_with?(message, [":connection_error:", "connection_error:"]) or
-      String.starts_with?(message, "no healthy connection available") or
       refused_stream?(message)
+  end
+
+  defp preflight_refusal?(status, message) do
+    status == GRPC.Status.unavailable() and
+      String.starts_with?(message, "no healthy connection available")
   end
 
   # A `:stream_error:` where gun refused the request *before the server could
