@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## 0.3.0 [2026-11-06]
+
+- [Improvement] Moved to `grpc` 1.0.6 (from 0.11.5) through `temporalio` 1.64.1, clearing CVE-2026-48853 (CRITICAL) and CVE-2026-48599 / CVE-2026-53430 / CVE-2026-48854 (HIGH). 1.0.6 is the minimum: it fixes the gun adapter wedging every RPC after a connection drop.
+- [Improvement] `gun` is a direct dependency, since grpc 1.0 no longer brings an HTTP/2 transport on its own. grpc requires `gun ~> 2.4.0`, so it moves from 2.6.0 to 2.4.1.
+- [Fix] Adapted `TemporalEx.Client` to grpc 1.0's connection model: grpc's application now starts `GRPC.Client.Supervisor`, and an RPC refused by a stopped connection process (`:noproc`, `:normal`, `:shutdown` or `{:shutdown, _}`) goes through the reconnect-and-retry-once path. No public API change.
+- [Fix] grpc 1.0.6's pre-flight refusal of an RPC on a dead connection (`UNAVAILABLE "no healthy connection available…"`) is retried after a reconnect, so a Temporal connection recycle no longer reaches callers. Other `UNAVAILABLE` errors still surface, since the server may already have acted on them.
+
 ## 0.2.7 [2026-09-09]
 
 - [Improvement] Refreshed dependencies. Direct: `temporalio` 1.62.7 → 1.62.13, `castore` 1.0.18 → 1.0.21, `jason` 1.4.4 → 1.4.5, plus the dev/test tools (`mox` 1.2.0 → 1.3.1, `ex_doc` 0.40.1 → 0.40.4, `credo` 1.7.17 → 1.7.19, `dialyxir` 1.4.7 → 1.4.8). Transitively this pulls the transport forward: `gun` 2.2.0 → 2.6.0, `cowlib` 2.16.0 → 2.20.0, `cowboy` 2.14.2 → 2.19.0 (clearing CVE-2026-43966, the HTTP request/response splitting issue fixed in cowboy 2.16.0), `mint` 1.7.1 → 1.10.0, `ranch` 2.2.0 → 2.3.0, `protobuf` 0.16.0 → 0.16.1, `telemetry` 1.4.1 → 1.4.2. No API or behavior change; the reconnect and GOAWAY-retry paths added in 0.2.2/0.2.4 still match on the same `gun` error strings under 2.6.0.

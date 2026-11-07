@@ -11,7 +11,7 @@ Add `temporal_ex` to your list of dependencies in `mix.exs`:
 ```elixir
 def deps do
   [
-    {:temporal_ex, "~> 0.1.0"}
+    {:temporal_ex, "~> 0.3.0"}
   ]
 end
 ```
