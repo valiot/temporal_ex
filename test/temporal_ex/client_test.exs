@@ -323,6 +323,15 @@ defmodule TemporalEx.ClientTest do
       assert Client.transport_dead_error?(
                {:error, %GRPC.RPCError{message: ":connection_error: :closed"}}
              )
+
+      # grpc 1.0.6 drops the leading colon.
+      assert Client.transport_dead_error?(
+               {:error, %GRPC.RPCError{message: "connection_error: :closed"}}
+             )
+
+      refute Client.transport_dead_error?(
+               {:error, %GRPC.RPCError{message: "workflow failed: upstream connection_error"}}
+             )
     end
 
     # A stream the peer refused before processing it: gun's `closing` state (the

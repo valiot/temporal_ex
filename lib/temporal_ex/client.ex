@@ -390,8 +390,7 @@ defmodule TemporalEx.Client do
 
   defp transport_dead_message?(message) do
     String.starts_with?(message, ":down:") or
-      String.starts_with?(message, ":connection_error:") or
-      String.contains?(message, "connection_error") or
+      String.starts_with?(message, [":connection_error:", "connection_error:"]) or
       String.starts_with?(message, "no healthy connection available") or
       refused_stream?(message)
   end
