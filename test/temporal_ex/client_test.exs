@@ -421,10 +421,13 @@ defmodule TemporalEx.ClientTest do
     end
   end
 
-  # The tests below run against the local Temporal dev server on 7233, through
-  # TcpProxy when they need the connection to go silent without closing.
+  # The tests below run against a local Temporal dev server on 7233, through
+  # TcpProxy when they need the connection to go silent without closing. They
+  # are tagged :temporal and skipped when nothing answers there (test_helper.exs).
 
   describe "call_timeout" do
+    @describetag :temporal
+
     setup :silent_client
 
     @tag call_timeout: 300
@@ -443,6 +446,16 @@ defmodule TemporalEx.ClientTest do
 
       assert {:error, %GRPC.RPCError{}} = result
       assert elapsed_ms >= 900
+    end
+
+    @tag call_timeout: 300
+    test "an explicit timeout: nil falls back to it", %{client: client} do
+      {elapsed_ms, result} =
+        timed(fn -> Client.rpc(client, :get_system_info, system_info(), timeout: nil) end)
+
+      assert {:error, %GRPC.RPCError{status: status}} = result
+      assert status == GRPC.Status.deadline_exceeded()
+      assert elapsed_ms < 2_000
     end
 
     # Each of these used to drop the caller's :timeout and wait the client's
@@ -487,6 +500,8 @@ defmodule TemporalEx.ClientTest do
   end
 
   describe "stopping the client" do
+    @describetag :temporal
+
     # Each connected client owns two processes under GRPC.Client.Supervisor:
     # the channel's GRPC.Client.Connection and the gun ConnectionProcess.
     # Clients of earlier tests die with their test process, asynchronously, so
@@ -558,6 +573,8 @@ defmodule TemporalEx.ClientTest do
   end
 
   describe "HTTP/2 keepalive" do
+    @describetag :temporal
+
     # Only the interval is shortened; the tolerance is the client's default,
     # so this also proves the defaults merge with caller http2_opts.
     setup do

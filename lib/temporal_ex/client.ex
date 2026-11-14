@@ -91,7 +91,8 @@ defmodule TemporalEx.Client do
   @spec rpc(GenServer.server(), atom(), struct(), keyword()) ::
           {:ok, struct()} | {:error, term()}
   def rpc(client, rpc_name, request, opts \\ []) do
-    timeout = Keyword.get_lazy(opts, :timeout, fn -> call_timeout(client) end)
+    # A `timeout: nil` means "not given", so it falls back like a missing one.
+    timeout = Keyword.get(opts, :timeout) || call_timeout(client)
     do_rpc(client, rpc_name, request, opts, timeout, _retried? = false)
   end
 
