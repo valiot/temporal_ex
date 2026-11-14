@@ -476,6 +476,62 @@ defmodule TemporalEx.ClientTest do
     end
   end
 
+  describe "stopping the client" do
+    # Each connected client owns two processes under GRPC.Client.Supervisor:
+    # the channel's GRPC.Client.Connection and the gun ConnectionProcess.
+    # Clients of earlier tests die with their test process, asynchronously, so
+    # wait for those to be gone before taking the baseline.
+    setup do
+      assert_eventually(fn -> grpc_connections() == 0 end)
+    end
+
+    test "GenServer.stop closes its connection" do
+      baseline = grpc_connections()
+      {:ok, client} = Client.start_link(target: "localhost:7233")
+      assert {:ok, _} = Client.rpc(client, :get_system_info, system_info())
+      assert grpc_connections() == baseline + 2
+
+      GenServer.stop(client)
+
+      assert_eventually(fn -> grpc_connections() == baseline end)
+    end
+
+    @tag :capture_log
+    test "supervisor restarts, crashes and shutdown do not leak connections" do
+      baseline = grpc_connections()
+
+      {:ok, sup} =
+        Supervisor.start_link([{Client, name: :lifecycle_client, target: "localhost:7233"}],
+          strategy: :one_for_one
+        )
+
+      connect = fn ->
+        assert {:ok, _} = Client.rpc(:lifecycle_client, :get_system_info, system_info())
+        assert_eventually(fn -> grpc_connections() == baseline + 2 end)
+      end
+
+      connect.()
+
+      :ok = Supervisor.terminate_child(sup, Client)
+      assert_eventually(fn -> grpc_connections() == baseline end)
+      {:ok, _} = Supervisor.restart_child(sup, Client)
+      connect.()
+
+      # An exit signal from a linked process (here: sent directly) crashes the
+      # client; it still closes its channel before the supervisor restarts it.
+      crashed = Process.whereis(:lifecycle_client)
+      ref = Process.monitor(crashed)
+      Process.exit(crashed, :boom)
+      assert_receive {:DOWN, ^ref, :process, ^crashed, :boom}, 1_000
+      assert_eventually(fn -> grpc_connections() == baseline end)
+      assert_eventually(fn -> Process.whereis(:lifecycle_client) not in [nil, crashed] end)
+      connect.()
+
+      Supervisor.stop(sup)
+      assert_eventually(fn -> grpc_connections() == baseline end)
+    end
+  end
+
   defp silent_client(context) do
     {:ok, proxy} = start_supervised({TcpProxy, 7233})
 
@@ -495,6 +551,18 @@ defmodule TemporalEx.ClientTest do
   defp timed(fun) do
     {us, result} = :timer.tc(fun)
     {div(us, 1_000), result}
+  end
+
+  defp grpc_connections do
+    DynamicSupervisor.count_children(GRPC.Client.Supervisor).active
+  end
+
+  defp assert_eventually(check, attempts \\ 100) do
+    cond do
+      check.() -> :ok
+      attempts == 0 -> flunk("condition not met within 1s")
+      true -> Process.sleep(10) && assert_eventually(check, attempts - 1)
+    end
   end
 
   # ── Channel-death fixtures ──────────────────────────────────────────

@@ -77,6 +77,12 @@ handle = TemporalEx.get_workflow_handle(:temporal_client, "my-workflow-123")
 Every top-level function and handle operation also takes a per-call
 `timeout:` (ms) that overrides `:call_timeout` for that RPC.
 
+### Connection lifecycle
+
+Stopping the client (`GenServer.stop/1`, or its supervisor shutting it down or
+restarting it) closes its gRPC connection. The close is graceful: RPCs already
+in flight on it get to finish.
+
 ### TLS / mTLS
 
 For Temporal Cloud or self-hosted TLS:

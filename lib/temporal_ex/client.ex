@@ -60,6 +60,9 @@ defmodule TemporalEx.Client do
       `:timeout` overrides it (default: 5000)
     * `:connect_retry` — Number of gRPC connection retries (default: 0)
     * `:adapter_opts` — Extra gRPC adapter options
+
+  Stopping the client (normally or through its supervisor) closes its
+  connection.
   """
   def start_link(opts \\ []) when is_list(opts) do
     name = Keyword.get(opts, :name)
@@ -165,6 +168,11 @@ defmodule TemporalEx.Client do
 
   @impl true
   def init(opts) do
+    # grpc keeps the connection under its own supervisor, not linked to us, so
+    # only terminate/2 can close it; trapping exits makes terminate/2 run when
+    # a supervisor shuts the client down too.
+    Process.flag(:trap_exit, true)
+
     server =
       (Keyword.get(opts, :target) || @default_server)
       |> Connection.normalize_server_address()
@@ -262,8 +270,20 @@ defmodule TemporalEx.Client do
     {:reply, state.call_timeout, state}
   end
 
+  # Trapping exits turns a linked process's death into this message; stop with
+  # its reason as an untrapped client would have, but through terminate/2.
+  @impl true
+  def handle_info({:EXIT, _pid, reason}, state) do
+    {:stop, reason, state}
+  end
+
   @impl true
   def terminate(_reason, state) do
+    case Map.get(state, :channel) do
+      nil -> :ok
+      channel -> disconnect_channel(channel)
+    end
+
     case Map.get(state, :meta_ref) do
       nil -> :ok
       ref -> :persistent_term.erase(meta_key(ref))
@@ -286,13 +306,12 @@ defmodule TemporalEx.Client do
   defp meta_ref(name) when is_atom(name), do: name
   defp meta_ref(_other), do: nil
 
-  # Named clients cache under the name only: a watchdog :shutdown restart
-  # re-registers the same name and overwrites the key, whereas a pid key would
-  # leak (a non-trapping GenServer skips terminate/2 on :shutdown). So a caller
-  # holding the pid of a name-registered client resolves pid -> name first;
-  # anonymous clients hit their pid key directly. `Process.info/2` reads the PCB
-  # without messaging the process, so it stays lock-free even while the mailbox
-  # is pinned mid-connect.
+  # Named clients cache under the name only: a restart re-registers the same
+  # name and overwrites the key, whereas a pid key would leak whenever
+  # terminate/2 is skipped (a `:kill`). So a caller holding the pid of a
+  # name-registered client resolves pid -> name first; anonymous clients hit
+  # their pid key directly. `Process.info/2` reads the PCB without messaging the
+  # process, so it stays lock-free even while the mailbox is pinned mid-connect.
   defp fetch_meta(client) when is_atom(client), do: get_meta(client)
 
   defp fetch_meta(client) when is_pid(client) do
