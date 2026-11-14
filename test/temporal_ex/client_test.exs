@@ -74,7 +74,7 @@ defmodule TemporalEx.ClientTest do
 
   describe "rpc/4" do
     test "returns connection error when server is not reachable" do
-      {:ok, pid} = Client.start_link(target: "localhost:17233")
+      {:ok, pid} = Client.start_link(target: closed_target())
 
       request = %Temporal.Api.Workflowservice.V1.GetSystemInfoRequest{}
       result = Client.rpc(pid, :get_system_info, request, timeout: 2_000)
@@ -93,7 +93,7 @@ defmodule TemporalEx.ClientTest do
       # Unreachable target: first attempt dies on the planted channel, retry
       # re-runs GRPC.Stub.connect and surfaces a connection error — never a
       # sticky `:down: :normal` on subsequent calls.
-      {:ok, pid} = Client.start_link(target: "localhost:17233")
+      {:ok, pid} = Client.start_link(target: closed_target())
 
       install_dying_channel!(pid, exit_reason: :normal)
 
@@ -117,7 +117,7 @@ defmodule TemporalEx.ClientTest do
     # when gun dies, and with `:shutdown` when its supervisor stops it. A
     # request queued behind either stop never reached gun, so it is retried.
     test "retries once when the connection process stops with a shutdown reason" do
-      {:ok, pid} = Client.start_link(target: "localhost:17233")
+      {:ok, pid} = Client.start_link(target: closed_target())
       request = %Temporal.Api.Workflowservice.V1.GetSystemInfoRequest{}
 
       for reason <- [:shutdown, {:shutdown, {:gun_down, :closed}}] do
@@ -133,7 +133,7 @@ defmodule TemporalEx.ClientTest do
     end
 
     test "retries once after gun dies mid-RPC with :noproc" do
-      {:ok, pid} = Client.start_link(target: "localhost:17233")
+      {:ok, pid} = Client.start_link(target: closed_target())
 
       # Already-dead process: gun.await reports `{:down, :noproc}` (the sticky
       # corpse case pipex's ConnectionWatchdog was written for).
@@ -168,7 +168,7 @@ defmodule TemporalEx.ClientTest do
         end
       end
 
-      {:ok, pid} = Client.start_link(target: "localhost:17233", connect_fun: connect_fun)
+      {:ok, pid} = Client.start_link(target: closed_target(), connect_fun: connect_fun)
 
       request = %Temporal.Api.Workflowservice.V1.GetSystemInfoRequest{}
 
@@ -185,7 +185,7 @@ defmodule TemporalEx.ClientTest do
       # Before offloading I/O from the GenServer, a mid-flight RPC blocked
       # every other call (including cheap namespace reads) for the full gun
       # await — the pipex EventSubscriber `get_namespace` timeout storm.
-      {:ok, pid} = Client.start_link(target: "localhost:17233", namespace: "zn-prod")
+      {:ok, pid} = Client.start_link(target: closed_target(), namespace: "zn-prod")
 
       install_dying_channel!(pid, exit_reason: :normal, hold_until_released_by: self())
 
@@ -224,7 +224,7 @@ defmodule TemporalEx.ClientTest do
 
       {:ok, pid} =
         Client.start_link(
-          target: "localhost:17233",
+          target: closed_target(),
           namespace: "blocked-ns",
           connect_fun: slow_connect
         )
@@ -263,7 +263,7 @@ defmodule TemporalEx.ClientTest do
       {:ok, pid} =
         Client.start_link(
           name: :meta_named_blocked_client,
-          target: "localhost:17233",
+          target: closed_target(),
           namespace: "named-ns",
           connect_fun: slow_connect
         )
@@ -412,6 +412,16 @@ defmodule TemporalEx.ClientTest do
 
   # ── Channel-death fixtures ──────────────────────────────────────────
   #
+  # A port nothing listens on, so "server unreachable" tests do not depend on
+  # what happens to run on the machine (a dev Temporal often sits on 7233 and
+  # neighbours). Bound by us, then released.
+  defp closed_target do
+    {:ok, socket} = :gen_tcp.listen(0, ip: {127, 0, 0, 1})
+    {:ok, port} = :inet.port(socket)
+    :ok = :gen_tcp.close(socket)
+    "127.0.0.1:#{port}"
+  end
+
   # Real grpc >= 1.0 path: the adapter `GenServer.call`s the channel's
   # connection process (`conn_pid`). When that process stops instead of
   # replying, the call exits and `invoke_rpc/4` turns it into the
