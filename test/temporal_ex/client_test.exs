@@ -2,6 +2,7 @@ defmodule TemporalEx.ClientTest do
   use ExUnit.Case
 
   alias TemporalEx.Client
+  alias TemporalEx.Test.TcpProxy
 
   describe "start_link/1" do
     test "starts with default options" do
@@ -408,6 +409,92 @@ defmodule TemporalEx.ClientTest do
       refute Client.transport_dead_error?({:ok, :whatever})
       refute Client.transport_dead_error?({:error, "some non-RPC string"})
     end
+  end
+
+  # The tests below run against the local Temporal dev server on 7233, through
+  # TcpProxy when they need the connection to go silent without closing.
+
+  describe "call_timeout" do
+    setup :silent_client
+
+    @tag call_timeout: 300
+    test "is the default timeout of every RPC", %{client: client} do
+      {elapsed_ms, result} = timed(fn -> Client.rpc(client, :get_system_info, system_info()) end)
+
+      assert {:error, %GRPC.RPCError{status: status}} = result
+      assert status == GRPC.Status.deadline_exceeded()
+      assert elapsed_ms < 2_000
+    end
+
+    @tag call_timeout: 300
+    test "a per-call :timeout overrides it", %{client: client} do
+      {elapsed_ms, result} =
+        timed(fn -> Client.rpc(client, :get_system_info, system_info(), timeout: 1_000) end)
+
+      assert {:error, %GRPC.RPCError{}} = result
+      assert elapsed_ms >= 900
+    end
+
+    # Each of these used to drop the caller's :timeout and wait the client's
+    # default instead (5s here).
+    test "top-level functions pass a per-call :timeout on", %{client: client} do
+      calls = [
+        start_workflow: fn opts ->
+          TemporalEx.start_workflow(client, "Wf", [], [id: "w", task_queue: "q"] ++ opts)
+        end,
+        signal_with_start: fn opts ->
+          TemporalEx.signal_with_start(
+            client,
+            "Wf",
+            [],
+            "sig",
+            [],
+            [id: "w", task_queue: "q"] ++ opts
+          )
+        end,
+        list_workflows: &TemporalEx.list_workflows(client, "", &1),
+        count_workflows: &TemporalEx.count_workflows(client, "", &1),
+        get_system_info: &TemporalEx.get_system_info(client, &1),
+        create_schedule: fn opts ->
+          TemporalEx.create_schedule(
+            client,
+            "s",
+            [
+              spec: [intervals: [[every: 60]]],
+              action: [workflow_type: "Wf", workflow_id: "w", task_queue: "q"]
+            ] ++ opts
+          )
+        end,
+        list_schedules: &TemporalEx.list_schedules(client, &1)
+      ]
+
+      for {name, call} <- calls do
+        {elapsed_ms, result} = timed(fn -> call.(timeout: 200) end)
+        assert {:error, _} = result, "#{name}: #{inspect(result)}"
+        assert elapsed_ms < 2_000, "#{name} ignored :timeout (#{elapsed_ms}ms)"
+      end
+    end
+  end
+
+  defp silent_client(context) do
+    {:ok, proxy} = start_supervised({TcpProxy, 7233})
+
+    {:ok, client} =
+      Client.start_link(
+        target: "127.0.0.1:#{TcpProxy.port(proxy)}",
+        call_timeout: Map.get(context, :call_timeout, 5_000)
+      )
+
+    assert {:ok, _} = Client.rpc(client, :get_system_info, system_info())
+    :ok = TcpProxy.blackhole(proxy)
+    %{client: client}
+  end
+
+  defp system_info, do: %Temporal.Api.Workflowservice.V1.GetSystemInfoRequest{}
+
+  defp timed(fun) do
+    {us, result} = :timer.tc(fun)
+    {div(us, 1_000), result}
   end
 
   # ── Channel-death fixtures ──────────────────────────────────────────

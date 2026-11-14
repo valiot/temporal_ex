@@ -69,10 +69,13 @@ handle = TemporalEx.get_workflow_handle(:temporal_client, "my-workflow-123")
 | `:api_key` | `nil` | API key or Bearer token |
 | `:tls` | `%{}` | TLS/mTLS config (see below) |
 | `:name` | `nil` | GenServer registration name |
-| `:call_timeout` | `5000` | Default RPC timeout (ms) |
+| `:call_timeout` | `5000` | Default timeout (ms) of every RPC; a per-call `timeout:` overrides it |
 | `:connect_retry` | `0` | gRPC connection retries |
 | `:data_converter` | `TemporalEx.DataConverter.Json` | Custom data converter module |
 | `:identity` | auto | Client identity string |
+
+Every top-level function and handle operation also takes a per-call
+`timeout:` (ms) that overrides `:call_timeout` for that RPC.
 
 ### TLS / mTLS
 

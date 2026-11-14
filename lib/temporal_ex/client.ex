@@ -56,7 +56,8 @@ defmodule TemporalEx.Client do
     * `:data_converter` — Module implementing `TemporalEx.DataConverter`
       (default: `TemporalEx.DataConverter.Json`)
     * `:name` — GenServer registration name
-    * `:call_timeout` — Default RPC timeout in ms (default: 5000)
+    * `:call_timeout` — Default timeout in ms for every RPC; a per-call
+      `:timeout` overrides it (default: 5000)
     * `:connect_retry` — Number of gRPC connection retries (default: 0)
     * `:adapter_opts` — Extra gRPC adapter options
   """
@@ -80,12 +81,12 @@ defmodule TemporalEx.Client do
   ## Options
 
     * `:namespace` — Override the default namespace for this call
-    * `:timeout` — Override the default call timeout
+    * `:timeout` — Override the client's `:call_timeout` for this call
   """
   @spec rpc(GenServer.server(), atom(), struct(), keyword()) ::
           {:ok, struct()} | {:error, term()}
   def rpc(client, rpc_name, request, opts \\ []) do
-    timeout = Keyword.get(opts, :timeout, @default_call_timeout)
+    timeout = Keyword.get_lazy(opts, :timeout, fn -> call_timeout(client) end)
     do_rpc(client, rpc_name, request, opts, timeout, _retried? = false)
   end
 
@@ -104,6 +105,13 @@ defmodule TemporalEx.Client do
     case fetch_meta(client) do
       {:ok, %{data_converter: data_converter}} -> data_converter
       :error -> GenServer.call(client, :get_data_converter)
+    end
+  end
+
+  defp call_timeout(client) do
+    case fetch_meta(client) do
+      {:ok, %{call_timeout: call_timeout}} -> call_timeout
+      :error -> GenServer.call(client, :get_call_timeout)
     end
   end
 
@@ -191,7 +199,8 @@ defmodule TemporalEx.Client do
       do:
         :persistent_term.put(meta_key(meta_ref), %{
           namespace: namespace,
-          data_converter: data_converter
+          data_converter: data_converter,
+          call_timeout: call_timeout
         })
 
     {:ok,
@@ -249,6 +258,10 @@ defmodule TemporalEx.Client do
     {:reply, state.data_converter, state}
   end
 
+  def handle_call(:get_call_timeout, _from, state) do
+    {:reply, state.call_timeout, state}
+  end
+
   @impl true
   def terminate(_reason, state) do
     case Map.get(state, :meta_ref) do
@@ -262,11 +275,11 @@ defmodule TemporalEx.Client do
 
   # ── Private ─────────────────────────────────────────────────────────
 
-  # Immutable metadata (namespace, data_converter) lives in :persistent_term
-  # so reads are lock-free and can't queue behind a blocking connect. Named
-  # clients key by name (a watchdog restart overwrites the same key, no leak);
-  # anonymous clients key by pid. via/global refs skip the cache and fall back
-  # to the GenServer.
+  # Immutable metadata (namespace, data_converter, call_timeout) lives in
+  # :persistent_term so reads are lock-free and can't queue behind a blocking
+  # connect. Named clients key by name (a watchdog restart overwrites the same
+  # key, no leak); anonymous clients key by pid. via/global refs skip the cache
+  # and fall back to the GenServer.
   defp meta_key(ref), do: {__MODULE__, :meta, ref}
 
   defp meta_ref(nil), do: self()

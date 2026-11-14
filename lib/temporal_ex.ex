@@ -44,7 +44,8 @@ defmodule TemporalEx do
     * `:data_converter` — Module implementing `TemporalEx.DataConverter`
       (default: `TemporalEx.DataConverter.Json`)
     * `:name` — GenServer registration name
-    * `:call_timeout` — Default RPC timeout in ms (default: 5000)
+    * `:call_timeout` — Default timeout in ms for every RPC; a per-call
+      `:timeout` overrides it (default: 5000)
 
   ## Examples
 
@@ -90,6 +91,7 @@ defmodule TemporalEx do
     * `:id_reuse_policy` — Workflow ID reuse policy atom
     * `:id_conflict_policy` — Workflow ID conflict policy atom
     * `:cron_schedule` — Cron schedule string
+    * `:timeout` — RPC timeout in ms (default: the client's `:call_timeout`)
 
   ## Examples
 
@@ -129,7 +131,7 @@ defmodule TemporalEx do
       cron_schedule: Keyword.get(opts, :cron_schedule, "")
     }
 
-    case Client.rpc(client, :start_workflow_execution, request, namespace: namespace) do
+    case Client.rpc(client, :start_workflow_execution, request, rpc_opts(namespace, opts)) do
       {:ok, response} ->
         handle = %WorkflowHandle{
           client: client,
@@ -209,7 +211,12 @@ defmodule TemporalEx do
       cron_schedule: Keyword.get(opts, :cron_schedule, "")
     }
 
-    case Client.rpc(client, :signal_with_start_workflow_execution, request, namespace: namespace) do
+    case Client.rpc(
+           client,
+           :signal_with_start_workflow_execution,
+           request,
+           rpc_opts(namespace, opts)
+         ) do
       {:ok, response} ->
         handle = %WorkflowHandle{
           client: client,
@@ -232,6 +239,7 @@ defmodule TemporalEx do
 
     * `:page_size` — Maximum number of results per page (default: 100)
     * `:next_page_token` — Token for pagination
+    * `:timeout` — RPC timeout in ms (default: the client's `:call_timeout`)
 
   ## Examples
 
@@ -249,7 +257,7 @@ defmodule TemporalEx do
       query: query
     }
 
-    case Client.rpc(client, :list_workflow_executions, request, namespace: namespace) do
+    case Client.rpc(client, :list_workflow_executions, request, rpc_opts(namespace, opts)) do
       {:ok, response} ->
         {:ok, response.executions, response.next_page_token}
 
@@ -260,6 +268,10 @@ defmodule TemporalEx do
 
   @doc """
   Counts workflow executions matching a visibility query.
+
+  ## Options
+
+    * `:timeout` — RPC timeout in ms (default: the client's `:call_timeout`)
 
   ## Examples
 
@@ -275,7 +287,7 @@ defmodule TemporalEx do
       query: query
     }
 
-    case Client.rpc(client, :count_workflow_executions, request, namespace: namespace) do
+    case Client.rpc(client, :count_workflow_executions, request, rpc_opts(namespace, opts)) do
       {:ok, response} ->
         {:ok, response.count}
 
@@ -287,15 +299,20 @@ defmodule TemporalEx do
   @doc """
   Returns system information from the Temporal server.
 
+  ## Options
+
+    * `:timeout` — RPC timeout in ms (default: the client's `:call_timeout`)
+
   ## Examples
 
       {:ok, info} = TemporalEx.get_system_info(client)
+      {:ok, info} = TemporalEx.get_system_info(client, timeout: 1_000)
   """
-  @spec get_system_info(GenServer.server()) :: {:ok, struct()} | {:error, Error.t()}
-  def get_system_info(client) do
+  @spec get_system_info(GenServer.server(), keyword()) :: {:ok, struct()} | {:error, Error.t()}
+  def get_system_info(client, opts \\ []) do
     request = %Temporal.Api.Workflowservice.V1.GetSystemInfoRequest{}
 
-    case Client.rpc(client, :get_system_info, request) do
+    case Client.rpc(client, :get_system_info, request, Keyword.take(opts, [:timeout])) do
       {:ok, response} -> {:ok, response}
       {:error, err} -> {:error, Error.from_rpc_error(err)}
     end
@@ -333,9 +350,8 @@ defmodule TemporalEx do
   def describe_task_queue(client, task_queue_name, opts \\ []) do
     namespace = Keyword.get(opts, :namespace) || Client.namespace(client)
     request = TaskQueueConverter.to_describe_request(namespace, task_queue_name, opts)
-    rpc_opts = [namespace: namespace] ++ Keyword.take(opts, [:timeout])
 
-    case Client.rpc(client, :describe_task_queue, request, rpc_opts) do
+    case Client.rpc(client, :describe_task_queue, request, rpc_opts(namespace, opts)) do
       {:ok, response} ->
         {:ok, TaskQueueConverter.from_describe_response(response)}
 
@@ -386,6 +402,7 @@ defmodule TemporalEx do
     * `:search_attributes` — Map of search attributes
     * `:identity` — Caller identity
     * `:request_id` — Idempotency key
+    * `:timeout` — RPC timeout in ms (default: the client's `:call_timeout`)
 
   ## Examples
 
@@ -426,7 +443,7 @@ defmodule TemporalEx do
       request_id: Keyword.get_lazy(opts, :request_id, &Common.request_id/0)
     }
 
-    case Client.rpc(client, :create_schedule, request, namespace: namespace) do
+    case Client.rpc(client, :create_schedule, request, rpc_opts(namespace, opts)) do
       {:ok, _response} ->
         handle = %ScheduleHandle{
           client: client,
@@ -467,6 +484,7 @@ defmodule TemporalEx do
 
     * `:page_size` — Maximum results per page (default: 100)
     * `:next_page_token` — Pagination token
+    * `:timeout` — RPC timeout in ms (default: the client's `:call_timeout`)
 
   ## Examples
 
@@ -484,12 +502,16 @@ defmodule TemporalEx do
       query: Keyword.get(opts, :query, "")
     }
 
-    case Client.rpc(client, :list_schedules, request, namespace: namespace) do
+    case Client.rpc(client, :list_schedules, request, rpc_opts(namespace, opts)) do
       {:ok, response} ->
         {:ok, response.schedules, response.next_page_token}
 
       {:error, err} ->
         {:error, Error.from_rpc_error(err, context: :schedule)}
     end
+  end
+
+  defp rpc_opts(namespace, opts) do
+    [namespace: namespace] ++ Keyword.take(opts, [:timeout])
   end
 end
