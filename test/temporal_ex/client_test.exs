@@ -506,6 +506,21 @@ defmodule TemporalEx.ClientTest do
       assert_eventually(fn -> grpc_connections() == baseline end)
     end
 
+    test "stray messages and :normal exit signals do not stop it" do
+      {:ok, client} = Client.start_link(target: "localhost:7233")
+      assert {:ok, _} = Client.rpc(client, :get_system_info, system_info())
+
+      send(client, :stray)
+      # From a process other than the parent (gen_server stops on the parent's
+      # exit signal before handle_info/2 sees it).
+      {sender, ref} = spawn_monitor(fn -> Process.exit(client, :normal) end)
+      assert_receive {:DOWN, ^ref, :process, ^sender, :normal}
+
+      assert {:ok, _} = Client.rpc(client, :get_system_info, system_info())
+      assert Process.alive?(client)
+      GenServer.stop(client)
+    end
+
     @tag :capture_log
     test "supervisor restarts, crashes and shutdown do not leak connections" do
       baseline = grpc_connections()

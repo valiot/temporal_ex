@@ -273,11 +273,15 @@ defmodule TemporalEx.Client do
   end
 
   # Trapping exits turns a linked process's death into this message; stop with
-  # its reason as an untrapped client would have, but through terminate/2.
+  # its reason as an untrapped client would have, but through terminate/2. An
+  # untrapped process ignores a :normal exit signal, so keep ignoring it.
   @impl true
-  def handle_info({:EXIT, _pid, reason}, state) do
-    {:stop, reason, state}
-  end
+  def handle_info({:EXIT, _pid, :normal}, state), do: {:noreply, state}
+  def handle_info({:EXIT, _pid, reason}, state), do: {:stop, reason, state}
+
+  # Defining handle_info/2 replaces GenServer's default one, which ignored stray
+  # messages; a stray message must not crash the client.
+  def handle_info(_msg, state), do: {:noreply, state}
 
   @impl true
   def terminate(_reason, state) do
