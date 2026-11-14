@@ -59,7 +59,9 @@ defmodule TemporalEx.Client do
     * `:call_timeout` — Default timeout in ms for every RPC; a per-call
       `:timeout` overrides it (default: 5000)
     * `:connect_retry` — Number of gRPC connection retries (default: 0)
-    * `:adapter_opts` — Extra gRPC adapter options
+    * `:adapter_opts` — Extra gRPC adapter options. HTTP/2 keepalive defaults
+      to a PING every 30s, closing the connection when one goes unanswered;
+      override with `adapter_opts: [http2_opts: %{keepalive: ms}]`
 
   Stopping the client (normally or through its supervisor) closes its
   connection.

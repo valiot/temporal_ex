@@ -406,6 +406,16 @@ defmodule TemporalEx.ClientTest do
                {:error, %GRPC.RPCError{status: 5, message: "workflow not found"}}
              )
 
+      # A slow server is not a dead one: keepalive, not the deadline, detects
+      # a silent peer.
+      refute Client.transport_dead_error?(
+               {:error,
+                %GRPC.RPCError{
+                  status: GRPC.Status.deadline_exceeded(),
+                  message: "Deadline expired"
+                }}
+             )
+
       refute Client.transport_dead_error?({:ok, :whatever})
       refute Client.transport_dead_error?({:error, "some non-RPC string"})
     end
@@ -529,6 +539,39 @@ defmodule TemporalEx.ClientTest do
 
       Supervisor.stop(sup)
       assert_eventually(fn -> grpc_connections() == baseline end)
+    end
+  end
+
+  describe "HTTP/2 keepalive" do
+    # Only the interval is shortened; the tolerance is the client's default,
+    # so this also proves the defaults merge with caller http2_opts.
+    setup do
+      {:ok, proxy} = start_supervised({TcpProxy, 7233})
+
+      {:ok, client} =
+        Client.start_link(
+          target: "127.0.0.1:#{TcpProxy.port(proxy)}",
+          adapter_opts: [http2_opts: %{keepalive: 200}]
+        )
+
+      %{proxy: proxy, client: client}
+    end
+
+    test "a peer that stops answering pings is dropped and the next RPC reconnects",
+         %{proxy: proxy, client: client} do
+      assert {:ok, _} = Client.rpc(client, :get_system_info, system_info())
+      conn_pid = :sys.get_state(client).channel.adapter_payload.conn_pid
+      ref = Process.monitor(conn_pid)
+
+      :ok = TcpProxy.blackhole(proxy)
+      started = System.monotonic_time(:millisecond)
+
+      # Unanswered at the next 200ms tick: closed within ~2 intervals, where
+      # without keepalive only the OS would notice (~15 minutes).
+      assert_receive {:DOWN, ^ref, :process, ^conn_pid, _reason}, 2_000
+      assert System.monotonic_time(:millisecond) - started < 1_000
+
+      assert {:ok, _} = Client.rpc(client, :get_system_info, system_info())
     end
   end
 

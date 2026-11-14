@@ -7,6 +7,22 @@ defmodule TemporalEx.Client.Connection do
   temporary PEM file writes in `resolve_client_mtls_files/1`.
   """
 
+  # HTTP/2 PING keepalive, so a connection whose peer stopped answering (a
+  # half-open TCP flow after a NAT/LB drop) is closed by gun and the client's
+  # reconnect path takes over, instead of every RPC timing out until the OS
+  # gives up on the socket. gun pings every `keepalive` ms whether or not RPCs
+  # are in flight, and with `keepalive_tolerance: 1` closes the connection when
+  # the previous ping is still unacknowledged at the next tick: detection takes
+  # 30-60s. gun leaves both off by default, and without a tolerance it pings
+  # but never closes.
+  #
+  # 30s is what Temporal's own SDKs ping at (Go SDK `defaultKeepAliveTime`).
+  # Temporal's frontend enforces `frontend.keepAliveMinTime` (10s default),
+  # answering pings faster than that with GOAWAY `too_many_pings`, and allows
+  # pings without active RPCs (`frontend.keepAlivePermitWithoutStream`, true
+  # by default), so 30s stays well clear of both.
+  @http2_keepalive %{keepalive: 30_000, keepalive_tolerance: 1}
+
   @doc """
   Normalizes a server address, auto-prepending `https://` for known
   Temporal Cloud domains.
@@ -109,7 +125,8 @@ defmodule TemporalEx.Client.Connection do
   def authorization_from_api_key(api_key) when is_binary(api_key), do: "Bearer " <> api_key
 
   @doc """
-  Builds the base gRPC connection options including adapter opts and retry config.
+  Builds the base gRPC connection options including adapter opts, retry
+  config and HTTP/2 keepalive (overridable through `adapter_opts: [http2_opts: ...]`).
 
   Returns `{connect_opts, temp_pem_file_paths}`.
   """
@@ -125,6 +142,7 @@ defmodule TemporalEx.Client.Connection do
       |> Map.get(:adapter_opts, [])
       |> List.wrap()
       |> Keyword.put_new(:retry, connect_retry)
+      |> Keyword.update(:http2_opts, @http2_keepalive, &Map.merge(@http2_keepalive, Map.new(&1)))
 
     base_opts = [adapter_opts: adapter_opts]
 

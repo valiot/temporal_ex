@@ -71,17 +71,41 @@ handle = TemporalEx.get_workflow_handle(:temporal_client, "my-workflow-123")
 | `:name` | `nil` | GenServer registration name |
 | `:call_timeout` | `5000` | Default timeout (ms) of every RPC; a per-call `timeout:` overrides it |
 | `:connect_retry` | `0` | gRPC connection retries |
+| `:adapter_opts` | `[]` | Extra gun adapter options, e.g. `http2_opts` (see keepalive below) |
 | `:data_converter` | `TemporalEx.DataConverter.Json` | Custom data converter module |
 | `:identity` | auto | Client identity string |
 
 Every top-level function and handle operation also takes a per-call
 `timeout:` (ms) that overrides `:call_timeout` for that RPC.
 
-### Connection lifecycle
+### Connection lifecycle and keepalive
 
 Stopping the client (`GenServer.stop/1`, or its supervisor shutting it down or
 restarting it) closes its gRPC connection. The close is graceful: RPCs already
 in flight on it get to finish.
+
+The client sends an HTTP/2 PING every 30s and closes the connection when a ping
+is still unanswered at the next one, so a connection whose peer went silent
+(a half-open TCP flow after a NAT or load balancer dropped it) is replaced
+within about a minute instead of failing every RPC with `DEADLINE_EXCEEDED`
+until the OS gives up on the socket. A slow server is not affected: pings are
+answered by the server's transport, independently of how long RPCs take.
+
+30s is the interval Temporal's own SDKs use, and is above the 10s minimum a
+Temporal frontend enforces by default (`frontend.keepAliveMinTime`; pinging
+faster gets a GOAWAY `too_many_pings`). Pings are also sent while no RPC is in
+flight, which the frontend allows by default
+(`frontend.keepAlivePermitWithoutStream: true`). If your server sets a higher
+minimum or disallows pings without active RPCs, raise the interval:
+
+```elixir
+{TemporalEx.Client,
+  target: "temporal.internal:7233",
+  adapter_opts: [http2_opts: %{keepalive: 120_000}]}
+```
+
+`keepalive` is gun's ping interval (ms) and `keepalive_tolerance` (default `1`)
+the number of unanswered pings after which gun closes the connection.
 
 ### TLS / mTLS
 

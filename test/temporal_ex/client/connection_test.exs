@@ -215,6 +215,25 @@ defmodule TemporalEx.Client.ConnectionTest do
       adapter_opts = Keyword.get(opts, :adapter_opts)
       assert Keyword.get(adapter_opts, :retry) == 3
     end
+
+    test "turns on HTTP/2 keepalive that closes a connection with an unanswered ping" do
+      {opts, _} = Connection.grpc_connect_opts("localhost:7233", %{})
+
+      assert opts[:adapter_opts][:http2_opts] == %{keepalive: 30_000, keepalive_tolerance: 1}
+    end
+
+    test "merges caller http2_opts over the keepalive defaults" do
+      {opts, _} =
+        Connection.grpc_connect_opts("localhost:7233", %{
+          adapter_opts: [http2_opts: [keepalive: 10_000, max_frame_size_received: 32_768]]
+        })
+
+      assert opts[:adapter_opts][:http2_opts] == %{
+               keepalive: 10_000,
+               keepalive_tolerance: 1,
+               max_frame_size_received: 32_768
+             }
+    end
   end
 
   describe "parse_non_negative_integer/2" do
