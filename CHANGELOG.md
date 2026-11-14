@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## 0.3.1 [2026-11-14]
+
+- [Fix] `:call_timeout` is now the default timeout of every RPC; a per-call `timeout:` still overrides it.
+- [Fix] `start_workflow`, `signal_with_start`, `list_workflows`, `count_workflows`, `get_system_info`, `create_schedule` and `list_schedules` now honour a per-call `:timeout`.
+- [Fix] Stopping or restarting a client (including through its supervisor) now closes its gRPC connection instead of leaking it.
+- [Improvement] HTTP/2 keepalive pings every 30s close a connection whose peer stopped answering, so the client reconnects instead of timing out every RPC; override with `adapter_opts: [http2_opts: %{keepalive: ms}]`. RPCs still running on a connection that keepalive closes are retried once on a new one, so give long-timeout signals a `:request_id`.
+
 ## 0.3.0 [2026-11-06]
 
 - [Improvement] Moved to `grpc` 1.0.6 (from 0.11.5) through `temporalio` 1.64.1, clearing CVE-2026-48853 (CRITICAL) and CVE-2026-48599 / CVE-2026-53430 / CVE-2026-48854 (HIGH). 1.0.6 is the minimum: it fixes the gun adapter wedging every RPC after a connection drop.
