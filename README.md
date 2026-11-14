@@ -95,8 +95,8 @@ answered by the server's transport, independently of how long RPCs take.
 Temporal frontend enforces by default (`frontend.keepAliveMinTime`; pinging
 faster gets a GOAWAY `too_many_pings`). Pings are also sent while no RPC is in
 flight, which the frontend allows by default
-(`frontend.keepAlivePermitWithoutStream: true`). If your server sets a higher
-minimum or disallows pings without active RPCs, raise the interval:
+(`frontend.keepAlivePermitWithoutStream: true`). If your server sets
+`keepAliveMinTime` above 30s, raise the interval above it:
 
 ```elixir
 {TemporalEx.Client,
@@ -104,8 +104,21 @@ minimum or disallows pings without active RPCs, raise the interval:
   adapter_opts: [http2_opts: %{keepalive: 120_000}]}
 ```
 
+If your server sets `keepAlivePermitWithoutStream: false`, no realistic interval
+helps: it penalises any ping on an idle connection sent less than 2h after the
+previous one, and answers a few with GOAWAY `too_many_pings`. Enable
+permit-without-stream on the server, or turn keepalive off with
+`http2_opts: %{keepalive: :infinity}` (losing silent-peer detection).
+
 `keepalive` is gun's ping interval (ms) and `keepalive_tolerance` (default `1`)
 the number of unanswered pings after which gun closes the connection.
+
+When keepalive closes a connection, RPCs still running on it fail as a
+transport error, and the client retries each one once on a new connection
+with a fresh timeout, as it does for any dropped connection. That only happens
+to RPCs whose timeout outlasts detection (30-60s). A non-idempotent call with
+such a long timeout, like a signal, could then be applied twice; give it a
+`:request_id` so the server deduplicates the retry.
 
 ### TLS / mTLS
 
