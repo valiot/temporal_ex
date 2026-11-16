@@ -2,6 +2,7 @@ defmodule TemporalEx.ClientTest do
   use ExUnit.Case
 
   alias TemporalEx.Client
+  alias TemporalEx.Test.TcpProxy
 
   describe "start_link/1" do
     test "starts with default options" do
@@ -74,7 +75,7 @@ defmodule TemporalEx.ClientTest do
 
   describe "rpc/4" do
     test "returns connection error when server is not reachable" do
-      {:ok, pid} = Client.start_link(target: "localhost:17233")
+      {:ok, pid} = Client.start_link(target: closed_target())
 
       request = %Temporal.Api.Workflowservice.V1.GetSystemInfoRequest{}
       result = Client.rpc(pid, :get_system_info, request, timeout: 2_000)
@@ -93,7 +94,7 @@ defmodule TemporalEx.ClientTest do
       # Unreachable target: first attempt dies on the planted channel, retry
       # re-runs GRPC.Stub.connect and surfaces a connection error — never a
       # sticky `:down: :normal` on subsequent calls.
-      {:ok, pid} = Client.start_link(target: "localhost:17233")
+      {:ok, pid} = Client.start_link(target: closed_target())
 
       install_dying_channel!(pid, exit_reason: :normal)
 
@@ -117,7 +118,7 @@ defmodule TemporalEx.ClientTest do
     # when gun dies, and with `:shutdown` when its supervisor stops it. A
     # request queued behind either stop never reached gun, so it is retried.
     test "retries once when the connection process stops with a shutdown reason" do
-      {:ok, pid} = Client.start_link(target: "localhost:17233")
+      {:ok, pid} = Client.start_link(target: closed_target())
       request = %Temporal.Api.Workflowservice.V1.GetSystemInfoRequest{}
 
       for reason <- [:shutdown, {:shutdown, {:gun_down, :closed}}] do
@@ -133,7 +134,7 @@ defmodule TemporalEx.ClientTest do
     end
 
     test "retries once after gun dies mid-RPC with :noproc" do
-      {:ok, pid} = Client.start_link(target: "localhost:17233")
+      {:ok, pid} = Client.start_link(target: closed_target())
 
       # Already-dead process: gun.await reports `{:down, :noproc}` (the sticky
       # corpse case pipex's ConnectionWatchdog was written for).
@@ -168,7 +169,7 @@ defmodule TemporalEx.ClientTest do
         end
       end
 
-      {:ok, pid} = Client.start_link(target: "localhost:17233", connect_fun: connect_fun)
+      {:ok, pid} = Client.start_link(target: closed_target(), connect_fun: connect_fun)
 
       request = %Temporal.Api.Workflowservice.V1.GetSystemInfoRequest{}
 
@@ -185,7 +186,7 @@ defmodule TemporalEx.ClientTest do
       # Before offloading I/O from the GenServer, a mid-flight RPC blocked
       # every other call (including cheap namespace reads) for the full gun
       # await — the pipex EventSubscriber `get_namespace` timeout storm.
-      {:ok, pid} = Client.start_link(target: "localhost:17233", namespace: "zn-prod")
+      {:ok, pid} = Client.start_link(target: closed_target(), namespace: "zn-prod")
 
       install_dying_channel!(pid, exit_reason: :normal, hold_until_released_by: self())
 
@@ -224,7 +225,7 @@ defmodule TemporalEx.ClientTest do
 
       {:ok, pid} =
         Client.start_link(
-          target: "localhost:17233",
+          target: closed_target(),
           namespace: "blocked-ns",
           connect_fun: slow_connect
         )
@@ -263,7 +264,7 @@ defmodule TemporalEx.ClientTest do
       {:ok, pid} =
         Client.start_link(
           name: :meta_named_blocked_client,
-          target: "localhost:17233",
+          target: closed_target(),
           namespace: "named-ns",
           connect_fun: slow_connect
         )
@@ -405,13 +406,252 @@ defmodule TemporalEx.ClientTest do
                {:error, %GRPC.RPCError{status: 5, message: "workflow not found"}}
              )
 
+      # A slow server is not a dead one: keepalive, not the deadline, detects
+      # a silent peer.
+      refute Client.transport_dead_error?(
+               {:error,
+                %GRPC.RPCError{
+                  status: GRPC.Status.deadline_exceeded(),
+                  message: "Deadline expired"
+                }}
+             )
+
       refute Client.transport_dead_error?({:ok, :whatever})
       refute Client.transport_dead_error?({:error, "some non-RPC string"})
     end
   end
 
+  # The tests below run against a local Temporal dev server on 7233, through
+  # TcpProxy when they need the connection to go silent without closing. They
+  # are tagged :temporal and skipped when nothing answers there (test_helper.exs).
+
+  describe "call_timeout" do
+    @describetag :temporal
+
+    setup :silent_client
+
+    @tag call_timeout: 300
+    test "is the default timeout of every RPC", %{client: client} do
+      {elapsed_ms, result} = timed(fn -> Client.rpc(client, :get_system_info, system_info()) end)
+
+      assert {:error, %GRPC.RPCError{status: status}} = result
+      assert status == GRPC.Status.deadline_exceeded()
+      assert elapsed_ms < 2_000
+    end
+
+    @tag call_timeout: 300
+    test "a per-call :timeout overrides it", %{client: client} do
+      {elapsed_ms, result} =
+        timed(fn -> Client.rpc(client, :get_system_info, system_info(), timeout: 1_000) end)
+
+      assert {:error, %GRPC.RPCError{}} = result
+      assert elapsed_ms >= 900
+    end
+
+    @tag call_timeout: 300
+    test "an explicit timeout: nil falls back to it", %{client: client} do
+      {elapsed_ms, result} =
+        timed(fn -> Client.rpc(client, :get_system_info, system_info(), timeout: nil) end)
+
+      assert {:error, %GRPC.RPCError{status: status}} = result
+      assert status == GRPC.Status.deadline_exceeded()
+      assert elapsed_ms < 2_000
+    end
+
+    # Each of these used to drop the caller's :timeout and wait the client's
+    # default instead (5s here).
+    test "top-level functions pass a per-call :timeout on", %{client: client} do
+      calls = [
+        start_workflow: fn opts ->
+          TemporalEx.start_workflow(client, "Wf", [], [id: "w", task_queue: "q"] ++ opts)
+        end,
+        signal_with_start: fn opts ->
+          TemporalEx.signal_with_start(
+            client,
+            "Wf",
+            [],
+            "sig",
+            [],
+            [id: "w", task_queue: "q"] ++ opts
+          )
+        end,
+        list_workflows: &TemporalEx.list_workflows(client, "", &1),
+        count_workflows: &TemporalEx.count_workflows(client, "", &1),
+        get_system_info: &TemporalEx.get_system_info(client, &1),
+        create_schedule: fn opts ->
+          TemporalEx.create_schedule(
+            client,
+            "s",
+            [
+              spec: [intervals: [[every: 60]]],
+              action: [workflow_type: "Wf", workflow_id: "w", task_queue: "q"]
+            ] ++ opts
+          )
+        end,
+        list_schedules: &TemporalEx.list_schedules(client, &1)
+      ]
+
+      for {name, call} <- calls do
+        {elapsed_ms, result} = timed(fn -> call.(timeout: 200) end)
+        assert {:error, _} = result, "#{name}: #{inspect(result)}"
+        assert elapsed_ms < 2_000, "#{name} ignored :timeout (#{elapsed_ms}ms)"
+      end
+    end
+  end
+
+  describe "stopping the client" do
+    @describetag :temporal
+
+    # Each connected client owns two processes under GRPC.Client.Supervisor:
+    # the channel's GRPC.Client.Connection and the gun ConnectionProcess.
+    # Clients of earlier tests die with their test process, asynchronously, so
+    # wait for those to be gone before taking the baseline.
+    setup do
+      assert_eventually(fn -> grpc_connections() == 0 end)
+    end
+
+    test "GenServer.stop closes its connection" do
+      baseline = grpc_connections()
+      {:ok, client} = Client.start_link(target: "localhost:7233")
+      assert {:ok, _} = Client.rpc(client, :get_system_info, system_info())
+      assert grpc_connections() == baseline + 2
+
+      GenServer.stop(client)
+
+      assert_eventually(fn -> grpc_connections() == baseline end)
+    end
+
+    test "stray messages and :normal exit signals do not stop it" do
+      {:ok, client} = Client.start_link(target: "localhost:7233")
+      assert {:ok, _} = Client.rpc(client, :get_system_info, system_info())
+
+      send(client, :stray)
+      # From a process other than the parent (gen_server stops on the parent's
+      # exit signal before handle_info/2 sees it).
+      {sender, ref} = spawn_monitor(fn -> Process.exit(client, :normal) end)
+      assert_receive {:DOWN, ^ref, :process, ^sender, :normal}
+
+      assert {:ok, _} = Client.rpc(client, :get_system_info, system_info())
+      assert Process.alive?(client)
+      GenServer.stop(client)
+    end
+
+    @tag :capture_log
+    test "supervisor restarts, crashes and shutdown do not leak connections" do
+      baseline = grpc_connections()
+
+      {:ok, sup} =
+        Supervisor.start_link([{Client, name: :lifecycle_client, target: "localhost:7233"}],
+          strategy: :one_for_one
+        )
+
+      connect = fn ->
+        assert {:ok, _} = Client.rpc(:lifecycle_client, :get_system_info, system_info())
+        assert_eventually(fn -> grpc_connections() == baseline + 2 end)
+      end
+
+      connect.()
+
+      :ok = Supervisor.terminate_child(sup, Client)
+      assert_eventually(fn -> grpc_connections() == baseline end)
+      {:ok, _} = Supervisor.restart_child(sup, Client)
+      connect.()
+
+      # An exit signal from a linked process (here: sent directly) crashes the
+      # client; it still closes its channel before the supervisor restarts it.
+      crashed = Process.whereis(:lifecycle_client)
+      ref = Process.monitor(crashed)
+      Process.exit(crashed, :boom)
+      assert_receive {:DOWN, ^ref, :process, ^crashed, :boom}, 1_000
+      assert_eventually(fn -> grpc_connections() == baseline end)
+      assert_eventually(fn -> Process.whereis(:lifecycle_client) not in [nil, crashed] end)
+      connect.()
+
+      Supervisor.stop(sup)
+      assert_eventually(fn -> grpc_connections() == baseline end)
+    end
+  end
+
+  describe "HTTP/2 keepalive" do
+    @describetag :temporal
+
+    # Only the interval is shortened; the tolerance is the client's default,
+    # so this also proves the defaults merge with caller http2_opts.
+    setup do
+      {:ok, proxy} = start_supervised({TcpProxy, 7233})
+
+      {:ok, client} =
+        Client.start_link(
+          target: "127.0.0.1:#{TcpProxy.port(proxy)}",
+          adapter_opts: [http2_opts: %{keepalive: 200}]
+        )
+
+      %{proxy: proxy, client: client}
+    end
+
+    test "a peer that stops answering pings is dropped and the next RPC reconnects",
+         %{proxy: proxy, client: client} do
+      assert {:ok, _} = Client.rpc(client, :get_system_info, system_info())
+      conn_pid = :sys.get_state(client).channel.adapter_payload.conn_pid
+      ref = Process.monitor(conn_pid)
+
+      :ok = TcpProxy.blackhole(proxy)
+      started = System.monotonic_time(:millisecond)
+
+      # Unanswered at the next 200ms tick: closed within ~2 intervals, where
+      # without keepalive only the OS would notice (~15 minutes).
+      assert_receive {:DOWN, ^ref, :process, ^conn_pid, _reason}, 2_000
+      assert System.monotonic_time(:millisecond) - started < 1_000
+
+      assert {:ok, _} = Client.rpc(client, :get_system_info, system_info())
+    end
+  end
+
+  defp silent_client(context) do
+    {:ok, proxy} = start_supervised({TcpProxy, 7233})
+
+    {:ok, client} =
+      Client.start_link(
+        target: "127.0.0.1:#{TcpProxy.port(proxy)}",
+        call_timeout: Map.get(context, :call_timeout, 5_000)
+      )
+
+    assert {:ok, _} = Client.rpc(client, :get_system_info, system_info())
+    :ok = TcpProxy.blackhole(proxy)
+    %{client: client}
+  end
+
+  defp system_info, do: %Temporal.Api.Workflowservice.V1.GetSystemInfoRequest{}
+
+  defp timed(fun) do
+    {us, result} = :timer.tc(fun)
+    {div(us, 1_000), result}
+  end
+
+  defp grpc_connections do
+    DynamicSupervisor.count_children(GRPC.Client.Supervisor).active
+  end
+
+  defp assert_eventually(check, attempts \\ 100) do
+    cond do
+      check.() -> :ok
+      attempts == 0 -> flunk("condition not met within 1s")
+      true -> Process.sleep(10) && assert_eventually(check, attempts - 1)
+    end
+  end
+
   # ── Channel-death fixtures ──────────────────────────────────────────
   #
+  # A port nothing listens on, so "server unreachable" tests do not depend on
+  # what happens to run on the machine (a dev Temporal often sits on 7233 and
+  # neighbours). Bound by us, then released.
+  defp closed_target do
+    {:ok, socket} = :gen_tcp.listen(0, ip: {127, 0, 0, 1})
+    {:ok, port} = :inet.port(socket)
+    :ok = :gen_tcp.close(socket)
+    "127.0.0.1:#{port}"
+  end
+
   # Real grpc >= 1.0 path: the adapter `GenServer.call`s the channel's
   # connection process (`conn_pid`). When that process stops instead of
   # replying, the call exits and `invoke_rpc/4` turns it into the

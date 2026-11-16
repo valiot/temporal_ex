@@ -56,9 +56,15 @@ defmodule TemporalEx.Client do
     * `:data_converter` — Module implementing `TemporalEx.DataConverter`
       (default: `TemporalEx.DataConverter.Json`)
     * `:name` — GenServer registration name
-    * `:call_timeout` — Default RPC timeout in ms (default: 5000)
+    * `:call_timeout` — Default timeout in ms for every RPC; a per-call
+      `:timeout` overrides it (default: 5000)
     * `:connect_retry` — Number of gRPC connection retries (default: 0)
-    * `:adapter_opts` — Extra gRPC adapter options
+    * `:adapter_opts` — Extra gRPC adapter options. HTTP/2 keepalive defaults
+      to a PING every 30s, closing the connection when one goes unanswered;
+      override with `adapter_opts: [http2_opts: %{keepalive: ms}]`
+
+  Stopping the client (normally or through its supervisor) closes its
+  connection.
   """
   def start_link(opts \\ []) when is_list(opts) do
     name = Keyword.get(opts, :name)
@@ -80,12 +86,13 @@ defmodule TemporalEx.Client do
   ## Options
 
     * `:namespace` — Override the default namespace for this call
-    * `:timeout` — Override the default call timeout
+    * `:timeout` — Override the client's `:call_timeout` for this call
   """
   @spec rpc(GenServer.server(), atom(), struct(), keyword()) ::
           {:ok, struct()} | {:error, term()}
   def rpc(client, rpc_name, request, opts \\ []) do
-    timeout = Keyword.get(opts, :timeout, @default_call_timeout)
+    # A `timeout: nil` means "not given", so it falls back like a missing one.
+    timeout = Keyword.get(opts, :timeout) || call_timeout(client)
     do_rpc(client, rpc_name, request, opts, timeout, _retried? = false)
   end
 
@@ -104,6 +111,13 @@ defmodule TemporalEx.Client do
     case fetch_meta(client) do
       {:ok, %{data_converter: data_converter}} -> data_converter
       :error -> GenServer.call(client, :get_data_converter)
+    end
+  end
+
+  defp call_timeout(client) do
+    case fetch_meta(client) do
+      {:ok, %{call_timeout: call_timeout}} -> call_timeout
+      :error -> GenServer.call(client, :get_call_timeout)
     end
   end
 
@@ -157,6 +171,11 @@ defmodule TemporalEx.Client do
 
   @impl true
   def init(opts) do
+    # grpc keeps the connection under its own supervisor, not linked to us, so
+    # only terminate/2 can close it; trapping exits makes terminate/2 run when
+    # a supervisor shuts the client down too.
+    Process.flag(:trap_exit, true)
+
     server =
       (Keyword.get(opts, :target) || @default_server)
       |> Connection.normalize_server_address()
@@ -191,7 +210,8 @@ defmodule TemporalEx.Client do
       do:
         :persistent_term.put(meta_key(meta_ref), %{
           namespace: namespace,
-          data_converter: data_converter
+          data_converter: data_converter,
+          call_timeout: call_timeout
         })
 
     {:ok,
@@ -249,8 +269,28 @@ defmodule TemporalEx.Client do
     {:reply, state.data_converter, state}
   end
 
+  def handle_call(:get_call_timeout, _from, state) do
+    {:reply, state.call_timeout, state}
+  end
+
+  # Trapping exits turns a linked process's death into this message; stop with
+  # its reason as an untrapped client would have, but through terminate/2. An
+  # untrapped process ignores a :normal exit signal, so keep ignoring it.
+  @impl true
+  def handle_info({:EXIT, _pid, :normal}, state), do: {:noreply, state}
+  def handle_info({:EXIT, _pid, reason}, state), do: {:stop, reason, state}
+
+  # Defining handle_info/2 replaces GenServer's default one, which ignored stray
+  # messages; a stray message must not crash the client.
+  def handle_info(_msg, state), do: {:noreply, state}
+
   @impl true
   def terminate(_reason, state) do
+    case Map.get(state, :channel) do
+      nil -> :ok
+      channel -> disconnect_channel(channel)
+    end
+
     case Map.get(state, :meta_ref) do
       nil -> :ok
       ref -> :persistent_term.erase(meta_key(ref))
@@ -262,24 +302,23 @@ defmodule TemporalEx.Client do
 
   # ── Private ─────────────────────────────────────────────────────────
 
-  # Immutable metadata (namespace, data_converter) lives in :persistent_term
-  # so reads are lock-free and can't queue behind a blocking connect. Named
-  # clients key by name (a watchdog restart overwrites the same key, no leak);
-  # anonymous clients key by pid. via/global refs skip the cache and fall back
-  # to the GenServer.
+  # Immutable metadata (namespace, data_converter, call_timeout) lives in
+  # :persistent_term so reads are lock-free and can't queue behind a blocking
+  # connect. Named clients key by name (a watchdog restart overwrites the same
+  # key, no leak); anonymous clients key by pid. via/global refs skip the cache
+  # and fall back to the GenServer.
   defp meta_key(ref), do: {__MODULE__, :meta, ref}
 
   defp meta_ref(nil), do: self()
   defp meta_ref(name) when is_atom(name), do: name
   defp meta_ref(_other), do: nil
 
-  # Named clients cache under the name only: a watchdog :shutdown restart
-  # re-registers the same name and overwrites the key, whereas a pid key would
-  # leak (a non-trapping GenServer skips terminate/2 on :shutdown). So a caller
-  # holding the pid of a name-registered client resolves pid -> name first;
-  # anonymous clients hit their pid key directly. `Process.info/2` reads the PCB
-  # without messaging the process, so it stays lock-free even while the mailbox
-  # is pinned mid-connect.
+  # Named clients cache under the name only: a restart re-registers the same
+  # name and overwrites the key, whereas a pid key would leak whenever
+  # terminate/2 is skipped (a `:kill`). So a caller holding the pid of a
+  # name-registered client resolves pid -> name first; anonymous clients hit
+  # their pid key directly. `Process.info/2` reads the PCB without messaging the
+  # process, so it stays lock-free even while the mailbox is pinned mid-connect.
   defp fetch_meta(client) when is_atom(client), do: get_meta(client)
 
   defp fetch_meta(client) when is_pid(client) do
